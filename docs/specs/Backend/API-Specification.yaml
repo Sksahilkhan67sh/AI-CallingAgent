@@ -1,0 +1,900 @@
+openapi: 3.0.3
+info:
+  title: AI Calling Agent API
+  version: "1.0.0"
+  description: >
+    API for the AI Calling Agent — complete outbound calling workflow with
+    disconnect recovery. Implements the entities in Database Design v1.0 and
+    the requirements in FRS v1.0. Status enums match Call State Machine v1.0.
+    Related documents: PRD v1.0, FRS v1.0, System Architecture v1.0,
+    Database Design v1.0, Lead Scoring Specification v1.0.
+  contact:
+    name: AI Calling Agent Platform Team
+
+servers:
+  - url: https://api.example.com/v1
+    description: Production
+  - url: https://staging-api.example.com/v1
+    description: Staging
+
+tags:
+  - name: Campaigns
+    description: Campaign creation and configuration (FR-1.1–FR-1.5, FR-6.x)
+  - name: Contacts
+    description: Contact records and their lifecycle (Call State Machine §2)
+  - name: Call Attempts
+    description: Per-attempt records, transcripts, and recordings (Call State Machine §3)
+  - name: Final Output
+    description: Consolidated per-contact results (FR-5.1–FR-5.3)
+  - name: Dashboard
+    description: Admin dashboard read/config endpoints (FR-3.5, FR-3.6)
+  - name: Webhooks
+    description: Inbound events from the telephony provider (FR-1.6, FR-2.8)
+
+paths:
+
+  /campaigns:
+    post:
+      tags: [Campaigns]
+      summary: Create a campaign and import contacts
+      description: >
+        Imports a contact list, validates and deduplicates numbers, and
+        creates the campaign with all contacts set to Pending. [FR-1.1–FR-1.4]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, contact_file]
+              properties:
+                name:
+                  type: string
+                  example: "Q4 Outbound — Product Launch"
+                contact_file:
+                  type: string
+                  format: binary
+                  description: CSV or Excel file of contacts
+                retry_policy:
+                  $ref: '#/components/schemas/RetryPolicyInput'
+                agent_config:
+                  $ref: '#/components/schemas/AgentConfigInput'
+      responses:
+        '201':
+          description: Campaign created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '400':
+          description: No valid contacts found in the uploaded file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      tags: [Campaigns]
+      summary: List campaigns
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/CampaignStatus'
+      responses:
+        '200':
+          description: List of campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Campaign'
+
+  /campaigns/{campaignId}:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [Campaigns]
+      summary: Get campaign details
+      responses:
+        '200':
+          description: Campaign detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [Campaigns]
+      summary: Update campaign status (pause/resume/complete)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: '#/components/schemas/CampaignStatus'
+      responses:
+        '200':
+          description: Updated campaign
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Campaign'
+
+  /campaigns/{campaignId}/retry-policy:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [Campaigns]
+      summary: Get the campaign's retry policy
+      description: Shared configuration evaluated by both never-connected and mid-call-disconnect retries. [FR-6.1–FR-6.6]
+      responses:
+        '200':
+          description: Retry policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryPolicy'
+    put:
+      tags: [Campaigns]
+      summary: Configure the campaign's retry policy
+      description: Takes effect immediately, no deployment required. [FR-3.6, FR-6.7]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetryPolicyInput'
+      responses:
+        '200':
+          description: Updated retry policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryPolicy'
+        '400':
+          description: Invalid policy value (e.g. negative retry count)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /campaigns/{campaignId}/agent-config:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [Campaigns]
+      summary: Get the campaign's agent configuration
+      description: Persona, script skeleton, required fields. See AI Agent Specification §10.
+      responses:
+        '200':
+          description: Agent configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfig'
+    put:
+      tags: [Campaigns]
+      summary: Configure the campaign's AI agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentConfigInput'
+      responses:
+        '200':
+          description: Updated agent configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentConfig'
+
+  /campaigns/{campaignId}/contacts:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [Contacts]
+      summary: List contacts in a campaign
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ContactStatus'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Paginated list of contacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Contact'
+
+  /contacts/{contactId}:
+    parameters:
+      - $ref: '#/components/parameters/ContactId'
+    get:
+      tags: [Contacts]
+      summary: Get a contact, including attempt history
+      description: Corresponds to the "Contact view (admin)" Final Output field. [FR-5.3]
+      responses:
+        '200':
+          description: Contact detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /contacts/{contactId}/suppress:
+    parameters:
+      - $ref: '#/components/parameters/ContactId'
+    post:
+      tags: [Contacts]
+      summary: Suppress a contact from future calling
+      description: >
+        Records a do-not-call request. Persists independently of normal
+        retention rules and is checked by phone number as well as contact ID
+        across future campaigns. [AI Agent Specification §8, Memory Specification §9]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  example: "Contact requested removal during call"
+      responses:
+        '201':
+          description: Suppression recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Suppression'
+
+  /contacts/{contactId}/final-output:
+    parameters:
+      - $ref: '#/components/parameters/ContactId'
+    get:
+      tags: [Final Output]
+      summary: Get the contact's final output record
+      description: >
+        Exactly one record per contact per terminal call, sourced from either
+        a normal completion or a Completed (Partial) closure. [FR-5.1, FR-5.2]
+      responses:
+        '200':
+          description: Final output record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalOutput'
+        '404':
+          description: Contact has not yet reached a terminal call state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /call-attempts/{attemptId}:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+    get:
+      tags: [Call Attempts]
+      summary: Get call attempt detail
+      responses:
+        '200':
+          description: Call attempt detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallAttempt'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /call-attempts/{attemptId}/transcript:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+    get:
+      tags: [Call Attempts]
+      summary: Get the attempt's transcript
+      description: May be partial if the attempt ended via an unrecovered disconnect. [FR-4.9]
+      responses:
+        '200':
+          description: Transcript
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcript'
+
+  /call-attempts/{attemptId}/recording:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+    get:
+      tags: [Call Attempts]
+      summary: Get a signed URL for the attempt's recording
+      responses:
+        '200':
+          description: Recording reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingRef'
+
+  /call-attempts/{attemptId}/disconnect-events:
+    parameters:
+      - $ref: '#/components/parameters/AttemptId'
+    get:
+      tags: [Call Attempts]
+      summary: List disconnect events for an attempt
+      description: An attempt may disconnect and reconnect multiple times before reaching a terminal state. [FR-4.1–FR-4.10]
+      responses:
+        '200':
+          description: List of disconnect events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DisconnectEvent'
+
+  /dashboard/campaigns/{campaignId}/analytics:
+    parameters:
+      - $ref: '#/components/parameters/CampaignId'
+    get:
+      tags: [Dashboard]
+      summary: Get campaign analytics
+      description: Live campaign status, lead classification, and call analytics. [FR-3.5]
+      responses:
+        '200':
+          description: Campaign analytics summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignAnalytics'
+
+  /webhooks/telephony/connection-status:
+    post:
+      tags: [Webhooks]
+      summary: Telephony provider reports a dial connection result
+      description: >
+        Triggers the Stage 1 connected/failed decision. [FR-1.6, FR-1.7]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectionStatusEvent'
+      responses:
+        '200':
+          description: Event accepted
+
+  /webhooks/telephony/disconnect:
+    post:
+      tags: [Webhooks]
+      summary: Telephony provider reports an unexpected disconnect
+      description: >
+        Triggers the Stage 4 recovery flow — state save must complete before
+        any retry decision is made. [FR-2.8, FR-4.1–FR-4.4]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisconnectEvent'
+      responses:
+        '200':
+          description: Event accepted and recovery flow initiated
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    webhookSignature:
+      type: apiKey
+      in: header
+      name: X-Provider-Signature
+      description: >
+        Telephony-provider-specific request signature, verified instead of
+        bearer auth for webhook endpoints.
+
+  parameters:
+    CampaignId:
+      name: campaignId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ContactId:
+      name: contactId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+    CampaignStatus:
+      type: string
+      enum: [draft, active, paused, completed]
+
+    Campaign:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/CampaignStatus'
+        contact_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    RetryPolicyInput:
+      type: object
+      properties:
+        max_retries:
+          type: integer
+          default: 2
+          minimum: 0
+          description: Retries beyond the initial attempt (3 total dial attempts at the default of 2). [FR-6.1]
+        retry_spacing_seconds:
+          type: array
+          items:
+            type: integer
+          default: [30, 600]
+          description: Escalating delays between retry attempts. Array length must equal max_retries — one spacing value per retry, none unused. [FR-6.2]
+        never_connected_rules:
+          type: object
+          description: >
+            Retry eligibility for NEVER_CONNECTED_FAILURE_REASON values (Call State Machine §5.1).
+            technical_issue is NOT a valid key here — it belongs to mid_call_rules only.
+          properties:
+            no_answer:
+              type: boolean
+              default: true
+            busy:
+              type: boolean
+              default: true
+            invalid_number:
+              type: boolean
+              default: false
+            rejected:
+              type: boolean
+              default: false
+            network_error:
+              type: boolean
+              default: true
+            provider_error:
+              type: boolean
+              default: true
+        mid_call_rules:
+          type: object
+          description: Retry eligibility for MID_CALL_DISCONNECT_REASON values (Call State Machine §5.2).
+          properties:
+            technical_issue:
+              type: boolean
+              default: true
+            network_problem:
+              type: boolean
+              default: true
+            provider_error:
+              type: boolean
+              default: true
+            ai_error:
+              type: boolean
+              default: true
+            unknown:
+              type: boolean
+              default: true
+            customer_hangup:
+              type: boolean
+              default: false
+        window_start:
+          type: string
+          format: time
+          example: "10:00:00"
+        window_end:
+          type: string
+          format: time
+          example: "18:00:00"
+
+    RetryPolicy:
+      allOf:
+        - $ref: '#/components/schemas/RetryPolicyInput'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            campaign_id:
+              type: string
+              format: uuid
+
+    AgentConfigInput:
+      type: object
+      properties:
+        persona_tone:
+          type: string
+          example: "warm and casual"
+        script_skeleton:
+          type: array
+          items:
+            type: string
+          description: Ordered talking points. [AI Agent Specification §2]
+        required_entity_fields:
+          type: array
+          items:
+            type: string
+            enum: [interest_level, objection, follow_up_preference, decision_maker_status, free_text_feedback]
+        escalation_contact_method:
+          type: string
+          description: Offered when the contact requests a human. [AI Agent Specification §8]
+
+    AgentConfig:
+      allOf:
+        - $ref: '#/components/schemas/AgentConfigInput'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            campaign_id:
+              type: string
+              format: uuid
+            prompt_template_version:
+              type: string
+
+    ContactStatus:
+      type: string
+      description: Matches Call State Machine §2.
+      enum:
+        - Pending
+        - Dialing
+        - InConversation
+        - Disconnected
+        - RetryScheduled
+        - Reconnecting
+        - Completed
+        - CompletedPartial
+        - Closed
+
+    Contact:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+        phone_number:
+          type: string
+        status:
+          $ref: '#/components/schemas/ContactStatus'
+        attempt_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    ContactDetail:
+      allOf:
+        - $ref: '#/components/schemas/Contact'
+        - type: object
+          properties:
+            attempts:
+              type: array
+              items:
+                $ref: '#/components/schemas/CallAttempt'
+            suppression:
+              $ref: '#/components/schemas/Suppression'
+            final_output:
+              $ref: '#/components/schemas/FinalOutput'
+
+    Suppression:
+      type: object
+      properties:
+        contact_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+        source:
+          type: string
+          enum: [agent_in_call, manual_api]
+        requested_at:
+          type: string
+          format: date-time
+
+    CallAttemptState:
+      type: string
+      description: Matches Call State Machine §3.
+      enum: [Initiated, Connected, FailedToConnect, DroppedMidCall, EndedNormally]
+
+    ConnectionFailureReason:
+      type: string
+      enum: [no_answer, busy, invalid_number, rejected, network_error, provider_error]
+
+    DisconnectReason:
+      type: string
+      enum: [technical_issue, network_problem, provider_error, customer_hangup, ai_error, unknown]
+
+    RecordingConsent:
+      type: string
+      enum: [granted, denied, unclear, not_applicable]
+      description: Top-level structured-output field (Prompt Specification §4), not a captured_entities value. See Recording-Consent.md §4.
+
+    CallAttempt:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        contact_id:
+          type: string
+          format: uuid
+        attempt_number:
+          type: integer
+        state:
+          $ref: '#/components/schemas/CallAttemptState'
+        connection_failure_reason:
+          $ref: '#/components/schemas/ConnectionFailureReason'
+        disconnect_reason:
+          $ref: '#/components/schemas/DisconnectReason'
+        recording_consent:
+          $ref: '#/components/schemas/RecordingConsent'
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    DisconnectEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        attempt_id:
+          type: string
+          format: uuid
+        reason:
+          $ref: '#/components/schemas/DisconnectReason'
+        occurred_at:
+          type: string
+          format: date-time
+        retry_approved:
+          type: boolean
+          nullable: true
+
+    ConnectionStatusEvent:
+      type: object
+      required: [attempt_id, connected]
+      properties:
+        attempt_id:
+          type: string
+          format: uuid
+        connected:
+          type: boolean
+        failure_reason:
+          $ref: '#/components/schemas/ConnectionFailureReason'
+
+    Transcript:
+      type: object
+      properties:
+        attempt_id:
+          type: string
+          format: uuid
+        is_partial:
+          type: boolean
+        content:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    RecordingRef:
+      type: object
+      properties:
+        attempt_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+          description: Time-limited signed URL
+        duration_seconds:
+          type: integer
+
+    TemperatureTag:
+      type: string
+      enum: [Hot, Warm, Cold]
+
+    QualificationLevel:
+      type: string
+      enum: [Unqualified, Marginal, Qualified, "Highly Qualified"]
+
+    ScoreConfidence:
+      type: string
+      enum: [full, partial]
+      description: partial for calls closed as Completed (Partial). See Lead Scoring Specification §5.
+
+    LeadScoreSummary:
+      type: object
+      properties:
+        lead_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        qualification_level:
+          $ref: '#/components/schemas/QualificationLevel'
+        temperature_tag:
+          $ref: '#/components/schemas/TemperatureTag'
+        conversion_probability:
+          type: integer
+          minimum: 0
+          maximum: 100
+        score_confidence:
+          $ref: '#/components/schemas/ScoreConfidence'
+
+    FinalOutput:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        contact_id:
+          type: string
+          format: uuid
+        source_attempt_id:
+          type: string
+          format: uuid
+        transcript:
+          $ref: '#/components/schemas/Transcript'
+        recording:
+          $ref: '#/components/schemas/RecordingRef'
+        feedback:
+          type: object
+          properties:
+            key_points:
+              type: array
+              items:
+                type: string
+            sentiment:
+              type: string
+            objections:
+              type: array
+              items:
+                type: string
+            suggestions:
+              type: array
+              items:
+                type: string
+        interest_detection:
+          type: object
+          properties:
+            interested:
+              type: boolean
+            follow_up_detected:
+              type: boolean
+            buying_intent:
+              type: string
+            intent_confidence:
+              type: number
+        lead_score_summary:
+          $ref: '#/components/schemas/LeadScoreSummary'
+        call_summary:
+          type: object
+          properties:
+            summary:
+              type: string
+            next_action_suggestion:
+              type: string
+            disposition:
+              type: string
+            tags:
+              type: array
+              items:
+                type: string
+        generated_at:
+          type: string
+          format: date-time
+
+    CampaignAnalytics:
+      type: object
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+        status_counts:
+          type: object
+          additionalProperties:
+            type: integer
+          example:
+            Pending: 4200
+            InConversation: 12
+            Completed: 8300
+            CompletedPartial: 150
+            Closed: 900
+        average_lead_score:
+          type: number
+        temperature_distribution:
+          type: object
+          properties:
+            Hot:
+              type: integer
+            Warm:
+              type: integer
+            Cold:
+              type: integer
+        disconnect_rate:
+          type: number
+          description: Fraction of connected calls that disconnected unexpectedly
+        reconnect_success_rate:
+          type: number
+          description: Fraction of disconnects that were successfully reconnected
+
+security:
+  - bearerAuth: []
