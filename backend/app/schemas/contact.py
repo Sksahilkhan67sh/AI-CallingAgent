@@ -23,6 +23,27 @@ class ContactCreate(BaseModel):
         return value
 
 
+class ContactUpdate(BaseModel):
+    """Only phone_number is mutable here. `campaign_id` changes go
+    through the dedicated campaign-association endpoint (eligibility/
+    suppression checks apply); `status` changes go through the
+    dedicated deactivation endpoint. Internal fields (id, attempt_count,
+    timestamps) are never client-settable."""
+
+    phone_number: str | None = None
+
+    @field_validator("phone_number")
+    @classmethod
+    def phone_number_must_be_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        try:
+            normalize_phone_number(value)
+        except InvalidPhoneNumberError as exc:
+            raise ValueError(str(exc)) from exc
+        return value
+
+
 class ContactResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
