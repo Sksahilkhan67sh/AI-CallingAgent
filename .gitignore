@@ -1,7 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Node
 node_modules/
 .next/
-__pycache__/
-.venv/
-*.pyc
+out/
+
+# Env
 .env
 .env.local
+!.env.example
+
+# OS
+.DS_Store
