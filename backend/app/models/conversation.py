@@ -13,7 +13,7 @@ producers are implemented here -- persistence only.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -35,9 +35,9 @@ class ConversationSession(Base):
         default=ConversationSessionStatus.ACTIVE,
     )
     started_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ConversationMessage(Base):
@@ -56,7 +56,7 @@ class ConversationMessage(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
@@ -65,10 +65,10 @@ class CallEvent(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     call_attempt_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("call_attempt.id"), nullable=False
+        ForeignKey("call_attempt.id"), nullable=False, index=True  # "call events by call"
     )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

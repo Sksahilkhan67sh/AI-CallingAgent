@@ -8,7 +8,7 @@ config change), not a dumping ground.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String
+from sqlalchemy import DateTime, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -18,6 +18,12 @@ from app.models.base import Base
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
+    __table_args__ = (
+        # "audit logs by entity" -- e.g. the full history for one contact
+        Index("ix_audit_log_entity", "entity_type", "entity_id"),
+        # "audit logs by ... time" -- recent-activity queries
+        Index("ix_audit_log_created_at", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     actor: Mapped[str] = mapped_column(String, nullable=False)
@@ -28,5 +34,5 @@ class AuditLog(Base):
         "metadata", JSONB, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
