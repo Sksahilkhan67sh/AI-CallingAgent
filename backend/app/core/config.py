@@ -3,8 +3,9 @@ Application configuration.
 
 Reads infrastructure configuration from environment variables, per
 Deployment/Environment-Config.md. Business configuration (retry policy,
-agent persona/script, etc.) is NOT read here -- it lives in the Primary DB
-and is out of scope for Checkpoint 00.
+agent persona/script, etc.) is NOT read here -- it lives in the database
+(`retry_policy`, `agent_config` tables) and is set at runtime via the
+admin dashboard, not via deployment.
 
 Every setting has a safe, non-functional default so the service can boot
 in a local/dev environment without any secrets configured. Production
@@ -35,7 +36,9 @@ class Settings(BaseSettings):
     api_rate_limit_per_minute: int = 60
 
     # --- Database & data layer (Environment-Config.md §2.1) ---
-    primary_db_url: str = "postgresql://postgres:postgres@localhost:5432/ai_calling_agent"
+    primary_db_url: str = (
+        "postgresql+psycopg://postgres:postgres@localhost:5432/ai_calling_agent"
+    )
     primary_db_pool_size: int = 5
 
 
