@@ -8,12 +8,15 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
-**Checkpoint 00 — Project foundation.** This checkpoint establishes the
-repository structure, backend and frontend skeletons, configuration
-handling, a health endpoint, a testing/CI foundation, and local
-development setup. No business logic (calling, conversation engine,
-retry/reconnect, post-call analysis) is implemented yet — see
-`docs/specs` for what's coming.
+**Checkpoint 01 — Backend foundation.** Adds PostgreSQL + Alembic
+migrations, the core domain schema (campaign, contact, call attempt,
+retry policy, suppression, audit log, processed-event idempotency, and a
+conversation-persistence foundation), and the first real API endpoints
+(`contacts`, `campaigns`) on top of the Checkpoint 00 skeleton. No
+queue/dialer, telephony, LiveKit, STT/LLM/TTS, retry execution, post-call
+analysis, or dashboard yet — see `docs/specs` for what's coming, and
+`docs/CHECKPOINT-01-NOTES.md` for schema decisions made in this
+checkpoint.
 
 ## Structure
 
@@ -28,16 +31,25 @@ docs/specs/ Full product, architecture, AI, security, and ops specification
 
 ### Backend
 
+Requires PostgreSQL running locally (see `docker compose up db`, or point
+`PRIMARY_DB_URL` at your own instance).
+
 ```bash
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env
+alembic upgrade head
 uvicorn app.main:app --reload
 # http://localhost:8000/health
 ```
 
-Tests: `pytest` · Lint: `ruff check .` · Types: `mypy app`
+Tests run against a real Postgres database (default: `ai_calling_agent_test`,
+create it once with `createdb ai_calling_agent_test` and `alembic upgrade head`
+against it) -- never SQLite, so Postgres-specific behavior (JSONB, native
+enums, CHECK constraints) is actually exercised.
+
+Tests: `pytest` · Lint: `ruff check .` · Types: `mypy app` · Migrations: `alembic revision --autogenerate -m "..."` / `alembic upgrade head`
 
 ### Frontend
 
