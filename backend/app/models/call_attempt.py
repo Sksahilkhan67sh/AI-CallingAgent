@@ -9,7 +9,7 @@ deliberately -- they are different taxonomies and must not be collapsed
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -55,6 +55,6 @@ class CallAttempt(Base):
         pg_enum(RecordingConsent, "recording_consent"), nullable=True
     )
     started_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
