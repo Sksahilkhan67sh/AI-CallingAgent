@@ -4,9 +4,18 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+# B008: FastAPI's `Depends(...)` in a parameter default is the documented,
+# idiomatic pattern (https://fastapi.tiangolo.com/tutorial/dependencies/),
+# not the mutable-default-argument bug this rule is designed to catch.
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic's own generated template -- not our code style to enforce.
+"alembic/env.py" = ["I001"]
 
 [tool.mypy]
 python_version = "3.11"
