@@ -9,7 +9,7 @@ webhook handler itself is a later checkpoint.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String
+from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -23,5 +23,5 @@ class ProcessedEvent(Base):
     event_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     received_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

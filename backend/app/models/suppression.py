@@ -10,7 +10,7 @@ service layer, not here.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -30,5 +30,5 @@ class Suppression(Base):
         pg_enum(SuppressionSource, "suppression_source"), nullable=False
     )
     requested_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
