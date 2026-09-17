@@ -131,3 +131,79 @@ def test_suppressed_number_cannot_be_added_as_contact(client, db_session):
     )
 
     assert response.status_code == 409
+
+
+def test_list_contacts_is_paginated(client):
+    campaign_id = _create_campaign(client)
+    for i in range(3):
+        client.post(
+            "/api/v1/contacts",
+            json={"campaign_id": campaign_id, "phone_number": f"555-500-000{i}"},
+        )
+
+    response = client.get(f"/api/v1/contacts?campaign_id={campaign_id}&limit=2")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 3
+
+
+def test_list_contacts_filters_by_status(client):
+    campaign_id = _create_campaign(client)
+    created = client.post(
+        "/api/v1/contacts",
+        json={"campaign_id": campaign_id, "phone_number": "555-600-0001"},
+    ).json()
+
+    response = client.get(f"/api/v1/contacts?campaign_id={campaign_id}&status=Pending")
+
+    assert response.status_code == 200
+    ids = [c["id"] for c in response.json()["items"]]
+    assert created["id"] in ids
+
+
+def test_update_contact_phone_number(client):
+    campaign_id = _create_campaign(client)
+    contact = client.post(
+        "/api/v1/contacts",
+        json={"campaign_id": campaign_id, "phone_number": "555-700-0001"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/contacts/{contact['id']}", json={"phone_number": "555-700-0002"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_phone_number"] == "+15557000002"
+
+
+def test_update_contact_phone_to_existing_duplicate_is_rejected(client):
+    campaign_id = _create_campaign(client)
+    client.post(
+        "/api/v1/contacts",
+        json={"campaign_id": campaign_id, "phone_number": "555-800-0001"},
+    )
+    contact_b = client.post(
+        "/api/v1/contacts",
+        json={"campaign_id": campaign_id, "phone_number": "555-800-0002"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/contacts/{contact_b['id']}", json={"phone_number": "555-800-0001"}
+    )
+
+    assert response.status_code == 409
+
+
+def test_deactivate_contact(client):
+    campaign_id = _create_campaign(client)
+    contact = client.post(
+        "/api/v1/contacts",
+        json={"campaign_id": campaign_id, "phone_number": "555-900-0001"},
+    ).json()
+
+    response = client.post(f"/api/v1/contacts/{contact['id']}/deactivate")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "Closed"
