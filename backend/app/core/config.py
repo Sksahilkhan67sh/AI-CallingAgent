@@ -41,6 +41,35 @@ class Settings(BaseSettings):
     )
     primary_db_pool_size: int = 5
 
+    # --- Queue / dialer (Checkpoint 03) ---
+    redis_url: str = "redis://localhost:6379/0"
+    queue_stream_key: str = "calls:outbound"
+    queue_consumer_group: str = "dialer-workers"
+    # How long a claimed-but-unacked stream entry may sit idle before
+    # another worker is allowed to reclaim it (a crashed worker's job).
+    queue_reclaim_idle_ms: int = 30_000
+
+    # Telephony provider selection -- "mock" is the only supported value
+    # until real provider credentials exist (see
+    # docs/CHECKPOINT-03-NOTES.md).
+    telephony_provider: str = "mock"
+    telephony_webhook_secret: str = "dev-only-insecure-webhook-secret-change-me"
+
+    # CPS (calls per second) and concurrency limits. Applied globally and
+    # independently per campaign / per provider via separate counters --
+    # see docs/CHECKPOINT-03-NOTES.md for why these are config, not a DB
+    # column.
+    global_cps_limit: int = 20
+    campaign_cps_limit: int = 5
+    provider_cps_limit: int = 20
+    global_concurrency_limit: int = 100
+    campaign_concurrency_limit: int = 30
+    provider_concurrency_limit: int = 100
+
+    # Circuit breaker (per provider)
+    circuit_breaker_error_threshold: int = 5
+    circuit_breaker_open_seconds: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:
