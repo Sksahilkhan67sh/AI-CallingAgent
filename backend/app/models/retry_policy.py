@@ -7,6 +7,7 @@ belongs to a later checkpoint.
 """
 
 import uuid
+from datetime import time
 
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, Time
 from sqlalchemy.dialects.postgresql import JSONB
@@ -56,5 +57,5 @@ class RetryPolicy(Base):
     mid_call_rules: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=lambda: dict(DEFAULT_MID_CALL_RULES)
     )
-    window_start: Mapped[object] = mapped_column(Time, nullable=False, default="10:00")
-    window_end: Mapped[object] = mapped_column(Time, nullable=False, default="18:00")
+    window_start: Mapped[time] = mapped_column(Time, nullable=False, default=time(10, 0))
+    window_end: Mapped[time] = mapped_column(Time, nullable=False, default=time(18, 0))

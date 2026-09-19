@@ -16,10 +16,13 @@ from app.schemas.campaign_contact import (
 )
 from app.schemas.contact import ContactResponse
 from app.schemas.pagination import Page
+from app.schemas.queue import EnqueueResult
 from app.services.campaign_contact_service import CampaignContactService
 from app.services.campaign_service import CampaignService
 from app.services.contact_import_service import ContactImportService
 from app.services.contact_service import ContactService
+from app.services.queue.enqueue_service import QueueEnqueueService
+from app.services.queue.factory import get_queue
 
 router = APIRouter(prefix="/api/v1/campaigns", tags=["Campaigns"])
 
@@ -138,3 +141,10 @@ def remove_contact(
     return CampaignContactResponse(
         contact_id=contact.id, campaign_id=contact.campaign_id, status=contact.status.value
     )
+
+
+@router.post("/{campaign_id}/enqueue", response_model=EnqueueResult)
+def enqueue_campaign(campaign_id: uuid.UUID, db: Session = Depends(get_db)) -> EnqueueResult:
+    """Checkpoint 03 Step 24: creates queue work only -- never dials
+    directly from this endpoint."""
+    return QueueEnqueueService(db, get_queue()).enqueue_campaign(campaign_id)
