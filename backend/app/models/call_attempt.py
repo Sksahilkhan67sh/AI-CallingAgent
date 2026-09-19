@@ -9,7 +9,7 @@ deliberately -- they are different taxonomies and must not be collapsed
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -30,6 +30,13 @@ class CallAttempt(Base):
         # already encodes campaign_id + contact_id + attempt_number.
         UniqueConstraint(
             "contact_id", "attempt_number", name="uq_call_attempt_contact_number"
+        ),
+        # Checkpoint 03: looking up an attempt by provider_call_id is how
+        # a webhook or an ambiguous-outcome reconciliation query finds
+        # its attempt -- see docs/CHECKPOINT-03-NOTES.md.
+        Index(
+            "uq_call_attempt_provider_call_id", "provider_call_id", unique=True,
+            postgresql_where="provider_call_id IS NOT NULL",
         ),
     )
 
@@ -54,6 +61,11 @@ class CallAttempt(Base):
     recording_consent: Mapped[RecordingConsent | None] = mapped_column(
         pg_enum(RecordingConsent, "recording_consent"), nullable=True
     )
+    # Checkpoint 03 additions -- not in the reconciled Database-Design.md
+    # baseline; required for provider integration (see
+    # docs/CHECKPOINT-03-NOTES.md).
+    provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider_call_id: Mapped[str | None] = mapped_column(String, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
