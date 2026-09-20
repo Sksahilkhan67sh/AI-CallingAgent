@@ -181,6 +181,8 @@ def _place_call(
         attempt.provider_call_id = result.provider_call_id
         attempt.state = CallAttemptState.CONNECTED
         contact.status = ContactStatus.IN_CONVERSATION
+        db.flush()
+        _start_conversation_safely(db, attempt, contact)
     else:
         circuit_breaker.record_failure()
         attempt.provider = provider.name
@@ -191,3 +193,21 @@ def _place_call(
         # retry-policy evaluation is a later checkpoint's job.
 
     db.flush()
+
+
+def _start_conversation_safely(db: Session, attempt: CallAttempt, contact: Contact) -> None:
+    """Checkpoint 04 Step 41-42: initialize the AI conversation once the
+    call connects. The call itself already connected successfully
+    (attempt.state is already CONNECTED) regardless of what happens
+    here, so a failure in conversation startup is logged, not raised --
+    it must not roll back or corrupt the telephony-layer fact that the
+    call connected.
+    """
+    from app.services.ai.conversation.start import start_conversation
+
+    try:
+        start_conversation(db, attempt, contact)
+    except Exception:
+        logger.exception(
+            "conversation_start_failed", extra={"attempt_id": str(attempt.id)}
+        )

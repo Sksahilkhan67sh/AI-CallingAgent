@@ -40,3 +40,12 @@ Note also that `working_memory_snapshot` is placed in the *in-memory
 store*, not the Primary DB, per `Database-Design.md` §4 ("Storage
 placement summary") — it will not become a Postgres table even in a
 later checkpoint that implements it.
+
+**Correction (Checkpoint 04):** the paragraph above was wrong.
+`Database-Design.md` §2.6 fully specifies `working_memory_snapshot` as
+a normal table with an `attempt_id` FK, documented the same way every
+other Primary DB table is; §4's "in-memory store" note describes an
+optional hot-path cache in front of it, not its only copy — durable
+conversation state has to live in PostgreSQL for "no lost
+conversations" to mean anything. The table is actually implemented in
+Checkpoint 04 — see `docs/CHECKPOINT-04-NOTES.md`.
