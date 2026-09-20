@@ -97,3 +97,41 @@ class ConversationRole(str, enum.Enum):
 class ConversationSessionStatus(str, enum.Enum):
     ACTIVE = "active"
     ENDED = "ended"
+
+
+class ConversationPhase(str, enum.Enum):
+    """Conversation-Flow.md §1. Distinct from CallAttemptState/ContactStatus
+    (call-connectivity state) -- this is conversation-content state
+    (Checkpoint 04 Step 30)."""
+
+    OPENING = "Opening"
+    DISCOVERY = "Discovery"
+    OBJECTION_HANDLING = "ObjectionHandling"
+    CLOSING = "Closing"
+    WRAP_UP = "WrapUp"
+
+
+class Intent(str, enum.Enum):
+    """Prompt-Specification.md §4 structured-output schema."""
+
+    AFFIRMATIVE = "affirmative"
+    NEGATIVE = "negative"
+    QUESTION = "question"
+    OBJECTION = "objection"
+    REQUEST_CALLBACK = "request_callback"
+    REQUEST_HUMAN = "request_human"
+    OFF_TOPIC = "off_topic"
+    END_CALL = "end_call"
+    UNCLEAR = "unclear"
+
+
+class NextAction(str, enum.Enum):
+    """Prompt-Specification.md §4 structured-output schema."""
+
+    CONTINUE_SCRIPT = "continue_script"
+    ANSWER_QUESTION = "answer_question"
+    HANDLE_OBJECTION = "handle_objection"
+    CONFIRM_AND_CLOSE = "confirm_and_close"
+    ESCALATE_TO_HUMAN_OFFER = "escalate_to_human_offer"
+    END_CALL_POLITE = "end_call_polite"
+    END_CALL_GOAL_MET = "end_call_goal_met"
