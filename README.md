@@ -8,20 +8,75 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
-**Checkpoint 03 — Queue + Dialer.** Adds the durable outbound calling
-pipeline: eligible contacts are enqueued onto a Redis Streams queue,
-admission-controlled (CPS + concurrency, global/campaign/provider) and
-picked up by a calling worker that dials through a telephony provider
-abstraction (mock only for now — see `docs/CHECKPOINT-03-NOTES.md`),
-persists the outcome to PostgreSQL, and acknowledges the job only after
-that persistence succeeds. No real-time AI conversation, STT/LLM/TTS,
-retry execution, post-call analysis, or dashboard yet.
+**Checkpoint 04 — Real-Time AI Voice Conversation Engine.** Adds the
+conversation layer that runs once a call connects: streaming STT ->
+conversation orchestrator -> structured LLM output -> deterministic
+policy engine -> TTS -> audio, with turn-by-turn transcript
+checkpointing, structured working memory (distinct from the
+transcript), bounded context, interruption/stale-response protection,
+opt-out detection feeding the canonical suppression table, and bounded
+failure handling throughout. STT/LLM/TTS/audio-gateway providers are
+mock-only for now (see `docs/CHECKPOINT-04-NOTES.md`). No disconnect/
+reconnect recovery, retry scheduling, post-call analysis, lead scoring,
+or dashboard yet — those are later checkpoints.
 
-Earlier checkpoints: contacts/campaigns CRUD + bulk import + campaign
-membership (Checkpoint 02), a hardened Postgres schema (Checkpoint 01A),
-and the FastAPI/database foundation (Checkpoints 00-01). See
+Earlier checkpoints: the durable outbound queue + dialer (Checkpoint
+03), contacts/campaigns CRUD + bulk import + campaign membership
+(Checkpoint 02), a hardened Postgres schema (Checkpoint 01A), and the
+FastAPI/database foundation (Checkpoints 00-01). See
 `docs/CHECKPOINT-0*-NOTES.md` for the reasoning behind schema and
 scope decisions made along the way.
+
+## AI conversation architecture (Checkpoint 04)
+
+```
+Call Connected (dialer worker)
+        |
+ start_conversation() -- internal only, not a public endpoint
+        |
+  ConversationSession created, audio + STT sessions start
+        |
+Customer audio -> STT (finalized utterances only) -> ConversationOrchestrator
+        |
+  load/update WorkingMemory (structured state, NOT the transcript)
+        |
+  bounded context (recent turns + memory + campaign system prompt)
+        |
+        LLM -> StructuredOutput (intent, entities, next_action, response_text)
+        |
+  PolicyEngine: response validation, phase routing, opt-out backstop,
+  termination rules -- all deterministic, the LLM never decides these
+        |
+       TTS -> audio output (discarded if a barge-in made this turn stale)
+        |
+  checkpoint memory + transcript message to PostgreSQL
+        |
+  loop, or end conversation (opt-out / goal met / max turns / max
+  duration / unrecoverable failure) -- ends update CallAttempt +
+  Contact + ConversationSession and log a CallEvent
+```
+
+- **Memory vs. transcript**: `ConversationMessage` (existing, Checkpoint
+  01) is the transcript -- what was said, in order. `WorkingMemory` /
+  `working_memory_snapshot` (new) is compact structured state -- what
+  the agent needs to continue (captured entities, script progress,
+  objections, last utterance). Memory is never the transcript restated.
+- **Stale-response protection**: every turn has a generation number; a
+  barge-in bumps it, and any LLM/TTS output computed under a stale
+  generation is discarded before it reaches audio output.
+- **Opt-out**: detected two ways -- the LLM's own structured output
+  (`requires_suppression`) and an independent deterministic keyword
+  check on the raw utterance (Step 17's "LLM must not be the sole
+  enforcement mechanism") -- either one ends the call and writes to the
+  one canonical `suppression` table.
+- **Session ownership**: `conversation_session.call_attempt_id` is
+  unique at the database level, so only one orchestrator can ever hold
+  an active session for a given call -- a real DB constraint, not an
+  in-memory lock.
+- **Providers**: `STT_PROVIDER` / `LLM_PROVIDER` / `TTS_PROVIDER` /
+  `AUDIO_GATEWAY_PROVIDER` -- `mock` is the only supported value until
+  real credentials exist.
+
 
 ## Queue architecture (Checkpoint 03)
 

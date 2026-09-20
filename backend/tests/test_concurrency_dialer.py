@@ -94,7 +94,33 @@ def test_concurrent_workers_create_exactly_one_call_attempt(redis_client, provid
     provider_calls_placed = len(provider._calls)
     assert provider_calls_placed == 1  # create_outbound_call effectively happened once
 
-    # cleanup
+    # cleanup -- child rows first (call_event/conversation_session/
+    # conversation_message/working_memory_snapshot all now get created
+    # when the call connects and Checkpoint 04's conversation layer
+    # starts, so they must be deleted before call_attempt or the FK
+    # constraints reject it)
+    from app.models.conversation import CallEvent, ConversationMessage, ConversationSession
+    from app.models.working_memory_snapshot import WorkingMemorySnapshot
+
+    session_ids = [
+        row[0]
+        for row in verify_session.execute(
+            select(ConversationSession.id).where(
+                ConversationSession.call_attempt_id.in_(
+                    select(CallAttempt.id).where(CallAttempt.contact_id == contact_id)
+                )
+            )
+        )
+    ]
+    if session_ids:
+        verify_session.query(ConversationMessage).filter(
+            ConversationMessage.session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        verify_session.query(ConversationSession).filter(
+            ConversationSession.id.in_(session_ids)
+        ).delete(synchronize_session=False)
+    verify_session.query(WorkingMemorySnapshot).filter_by(attempt_id=attempts[0].id).delete()
+    verify_session.query(CallEvent).filter_by(call_attempt_id=attempts[0].id).delete()
     verify_session.query(CallAttempt).filter_by(contact_id=contact_id).delete()
     verify_session.query(Contact).filter_by(id=contact_id).delete()
     verify_session.query(Campaign).filter_by(id=campaign_id).delete()

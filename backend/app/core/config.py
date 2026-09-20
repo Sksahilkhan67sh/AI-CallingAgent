@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     circuit_breaker_error_threshold: int = 5
     circuit_breaker_open_seconds: int = 30
 
+    # --- Real-time AI conversation (Checkpoint 04) ---
+    # "mock" is the only supported value for each until real provider
+    # credentials exist -- see docs/CHECKPOINT-04-NOTES.md.
+    stt_provider: str = "mock"
+    llm_provider: str = "mock"
+    tts_provider: str = "mock"
+    audio_gateway_provider: str = "mock"
+
 
 @lru_cache
 def get_settings() -> Settings:
