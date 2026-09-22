@@ -20,10 +20,21 @@ class DialJob:
     idempotency_key: str
     enqueued_at: str
     trace_id: str
+    # Checkpoint 05: present only on jobs the recovery dispatcher
+    # produces. recovery_type e.g. "RECONNECT"; previous_attempt_id is
+    # the prior CallAttempt whose working memory should be restored.
+    recovery_type: str | None = None
+    previous_attempt_id: str | None = None
 
     @classmethod
     def new(
-        cls, *, campaign_id: uuid.UUID, contact_id: uuid.UUID, attempt_number: int
+        cls,
+        *,
+        campaign_id: uuid.UUID,
+        contact_id: uuid.UUID,
+        attempt_number: int,
+        recovery_type: str | None = None,
+        previous_attempt_id: str | None = None,
     ) -> "DialJob":
         idempotency_key = f"{campaign_id}:{contact_id}:{attempt_number}"
         return cls(
@@ -34,6 +45,8 @@ class DialJob:
             idempotency_key=idempotency_key,
             enqueued_at=datetime.now(UTC).isoformat(),
             trace_id=str(uuid.uuid4()),
+            recovery_type=recovery_type,
+            previous_attempt_id=previous_attempt_id,
         )
 
     def to_json(self) -> str:

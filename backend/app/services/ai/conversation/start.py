@@ -25,7 +25,12 @@ from app.services.ai.memory.store import MemoryStore
 
 
 def start_conversation(
-    db: Session, call_attempt: CallAttempt, contact: Contact, *, is_reconnect: bool = False
+    db: Session,
+    call_attempt: CallAttempt,
+    contact: Contact,
+    *,
+    is_reconnect: bool = False,
+    previous_attempt_id: str | None = None,
 ) -> ConversationOrchestrator:
     campaign = db.get(Campaign, contact.campaign_id)
     agent_config = db.execute(
@@ -44,6 +49,7 @@ def start_conversation(
         brand_name=campaign.name if campaign else "our company",
         agent_config=agent_config,
         is_reconnect=is_reconnect,
+        previous_attempt_id=previous_attempt_id,
     )
     orchestrator.start()
     return orchestrator

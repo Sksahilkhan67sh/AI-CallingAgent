@@ -21,8 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.call_attempt import CallAttempt
+from app.models.campaign import Campaign
 from app.models.contact import Contact
-from app.models.enums import CallAttemptState, ContactStatus
+from app.models.enums import CallAttemptState, ContactStatus, NeverConnectedFailureReason
 from app.models.retry_policy import RetryPolicy
 from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.campaign_repository import CampaignRepository
@@ -32,6 +33,8 @@ from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
+from app.services.recovery.factory import get_recovery_scheduler
+from app.services.recovery.manager import RecoveryManager
 from app.services.telephony.base import ProviderOutcome, TelephonyProvider
 from app.services.telephony.circuit_breaker import CircuitBreaker
 
@@ -182,32 +185,74 @@ def _place_call(
         attempt.state = CallAttemptState.CONNECTED
         contact.status = ContactStatus.IN_CONVERSATION
         db.flush()
-        _start_conversation_safely(db, attempt, contact)
+        _start_conversation_safely(
+            db,
+            attempt,
+            contact,
+            is_reconnect=job.recovery_type is not None,
+            previous_attempt_id=job.previous_attempt_id,
+        )
     else:
         circuit_breaker.record_failure()
         attempt.provider = provider.name
         attempt.state = CallAttemptState.FAILED_TO_CONNECT
         attempt.connection_failure_reason = result.failure_reason
         attempt.ended_at = datetime.now(UTC)
-        # Contact stays at Dialing -- see docs/CHECKPOINT-03-NOTES.md:
-        # retry-policy evaluation is a later checkpoint's job.
+        db.flush()
+        if result.failure_reason is not None:
+            _handle_never_connected_failure(db, attempt, contact, result.failure_reason)
 
     db.flush()
 
 
-def _start_conversation_safely(db: Session, attempt: CallAttempt, contact: Contact) -> None:
-    """Checkpoint 04 Step 41-42: initialize the AI conversation once the
-    call connects. The call itself already connected successfully
-    (attempt.state is already CONNECTED) regardless of what happens
-    here, so a failure in conversation startup is logged, not raised --
-    it must not roll back or corrupt the telephony-layer fact that the
-    call connected.
+def _start_conversation_safely(
+    db: Session,
+    attempt: CallAttempt,
+    contact: Contact,
+    *,
+    is_reconnect: bool = False,
+    previous_attempt_id: str | None = None,
+) -> None:
+    """Checkpoint 04 Step 41-42 (extended in Checkpoint 05 with
+    is_reconnect/previous_attempt_id for retries): initialize the AI
+    conversation once the call connects. The call itself already
+    connected successfully (attempt.state is already CONNECTED)
+    regardless of what happens here, so a failure in conversation
+    startup is logged, not raised -- it must not roll back or corrupt
+    the telephony-layer fact that the call connected.
     """
     from app.services.ai.conversation.start import start_conversation
 
     try:
-        start_conversation(db, attempt, contact)
+        start_conversation(
+            db,
+            attempt,
+            contact,
+            is_reconnect=is_reconnect,
+            previous_attempt_id=previous_attempt_id,
+        )
     except Exception:
         logger.exception(
             "conversation_start_failed", extra={"attempt_id": str(attempt.id)}
         )
+
+
+def _handle_never_connected_failure(
+    db: Session, attempt: CallAttempt, contact: Contact, reason: NeverConnectedFailureReason
+) -> None:
+    """Checkpoint 05: a never-connected failure (no_answer, busy, etc.)
+    also goes through the single RecoveryManager -- Checkpoint 03 left
+    this as a documented gap ("retry-policy evaluation is a later
+    checkpoint's job"); this is that checkpoint. Logged, not raised, for
+    the same reason as conversation-start failures above: the call
+    outcome itself is already durably persisted regardless of what the
+    recovery decision does.
+    """
+    try:
+        campaign = db.get(Campaign, contact.campaign_id)
+        if campaign is not None:
+            RecoveryManager(db, get_recovery_scheduler()).handle_disconnect(
+                attempt, contact, campaign, never_connected=True, reason_key=reason.value
+            )
+    except Exception:
+        logger.exception("recovery_handling_failed", extra={"attempt_id": str(attempt.id)})

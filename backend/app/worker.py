@@ -16,6 +16,8 @@ from app.core.database import SessionLocal
 from app.core.redis_client import get_redis
 from app.services.queue.dialer_worker import JobOutcome, process_one_job
 from app.services.queue.factory import get_admission_controller, get_queue
+from app.services.recovery.dispatch import dispatch_due_recovery_jobs
+from app.services.recovery.factory import get_recovery_scheduler
 from app.services.telephony.circuit_breaker import CircuitBreaker
 from app.services.telephony.factory import get_telephony_provider
 
@@ -23,6 +25,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
 
 _shutdown_requested = False
+
+# Checkpoint 05: how often (in loop iterations) to check for recovery
+# jobs that have come due -- not on every iteration, same reasoning as
+# the existing stale-job-reclaim cadence below.
+_RECOVERY_DISPATCH_EVERY_N_ITERATIONS = 10
 
 
 def _handle_shutdown_signal(signum: int, frame: FrameType | None) -> None:
@@ -46,6 +53,7 @@ def run() -> None:
     admission = get_admission_controller()
     provider = get_telephony_provider()
     circuit_breaker = CircuitBreaker(get_redis(), provider.name)
+    recovery_scheduler = get_recovery_scheduler()
 
     logger.info("worker_started", extra={"consumer_name": consumer_name})
 
@@ -65,6 +73,11 @@ def run() -> None:
                     )
                     if reclaimed:
                         logger.info("reclaimed_stale_jobs", extra={"count": len(reclaimed)})
+
+                if reclaim_counter % _RECOVERY_DISPATCH_EVERY_N_ITERATIONS == 0:
+                    dispatched = dispatch_due_recovery_jobs(recovery_scheduler, queue)
+                    if dispatched:
+                        logger.info("recovery_jobs_dispatched", extra={"count": dispatched})
 
                 outcome = process_one_job(
                     db, queue, admission, provider, circuit_breaker, consumer_name=consumer_name
