@@ -23,6 +23,7 @@ from app.models.conversation import CallEvent
 from app.models.enums import CampaignStatus, ContactStatus
 from app.models.retry_policy import RetryPolicy
 from app.repositories.suppression_repository import SuppressionRepository
+from app.services.analysis.admission import enqueue_call_analysis
 from app.services.audit_service import record_audit_event
 from app.services.recovery.job import RecoveryJob
 from app.services.recovery.scheduler import RecoveryScheduler
@@ -178,6 +179,14 @@ class RecoveryManager:
             contact.status = ContactStatus.COMPLETED_PARTIAL
 
         self.db.flush()
+
+        # Checkpoint 06: same single admission entry point as the
+        # orchestrator's graceful-ending path. Called unconditionally;
+        # it self-filters on call_attempt.state (excludes
+        # FailedToConnect -- no conversation occurred) and contact.status
+        # (excludes Closed/suppressed).
+        enqueue_call_analysis(self.db, call_attempt, contact)
+
         return RecoveryDecision(should_retry=False, reason=reason)
 
     def _log_event(self, call_attempt: CallAttempt, event_type: str, payload: dict) -> None:
