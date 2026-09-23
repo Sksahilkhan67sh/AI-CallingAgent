@@ -8,24 +8,75 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
-**Checkpoint 04 — Real-Time AI Voice Conversation Engine.** Adds the
-conversation layer that runs once a call connects: streaming STT ->
-conversation orchestrator -> structured LLM output -> deterministic
-policy engine -> TTS -> audio, with turn-by-turn transcript
-checkpointing, structured working memory (distinct from the
-transcript), bounded context, interruption/stale-response protection,
-opt-out detection feeding the canonical suppression table, and bounded
-failure handling throughout. STT/LLM/TTS/audio-gateway providers are
-mock-only for now (see `docs/CHECKPOINT-04-NOTES.md`). No disconnect/
-reconnect recovery, retry scheduling, post-call analysis, lead scoring,
-or dashboard yet — those are later checkpoints.
+**Checkpoint 05 — Recovery & Reconnection Engine.** Adds what happens
+when a call disconnects mid-conversation or never connects: a single
+`RecoveryManager` decides, deterministically, whether to retry (per the
+existing `RetryPolicy` — max 2 retries, 30s/10min spacing) or
+terminalize, schedules due retries on a Redis-backed durable delay
+queue, and hands the actual redial to the *existing* Checkpoint 03
+dialer — no second queue or dialer. A reconnected call restores the
+previous attempt's structured working memory (not its transcript, kept
+separate per Checkpoint 04's own rule) and continues the conversation.
+Opt-out, suppression, a paused campaign, or a closed calling window all
+correctly prevent or defer a retry without ever creating a duplicate
+call. See `docs/CHECKPOINT-05-NOTES.md` for the full reasoning.
 
-Earlier checkpoints: the durable outbound queue + dialer (Checkpoint
-03), contacts/campaigns CRUD + bulk import + campaign membership
-(Checkpoint 02), a hardened Postgres schema (Checkpoint 01A), and the
+Earlier checkpoints: the real-time AI voice conversation engine
+(Checkpoint 04), the durable outbound queue + dialer (Checkpoint 03),
+contacts/campaigns CRUD + bulk import + campaign membership (Checkpoint
+02), a hardened Postgres schema (Checkpoint 01A), and the
 FastAPI/database foundation (Checkpoints 00-01). See
 `docs/CHECKPOINT-0*-NOTES.md` for the reasoning behind schema and
 scope decisions made along the way.
+
+## Recovery architecture (Checkpoint 05)
+
+```
+Call disconnects mid-conversation (orchestrator.handle_disconnect)
+      or a dial never connects (dialer worker's failure branch)
+                        |
+                 RecoveryManager
+        (suppression/opt-out always wins first)
+                        |
+              read the existing RetryPolicy
+           (per-reason rules, max_retries, spacing)
+                 /                        \
+         not retryable                  retryable
+       or max attempts                       |
+              |                    schedule on Redis sorted set
+         terminalize              (recovery:scheduled, due-at score)
+       (CallEvent + audit)                    |
+                              worker loop periodically dispatches
+                                due jobs onto the *existing*
+                                calls:outbound stream
+                                              |
+                              the *existing* CP03 dialer worker
+                              processes it exactly like any other
+                              dial: admission control, provider
+                              reconciliation, a brand-new CallAttempt
+                                              |
+                                    on connect: CP04's
+                              start_conversation(..., is_reconnect=True,
+                              previous_attempt_id=...) restores the
+                              prior attempt's working memory
+```
+
+- **One decision owner**: `RecoveryManager` is the only place that
+  reads `RetryPolicy` and decides retry vs. terminal — both the
+  dialer's never-connected-failure path and the orchestrator's
+  mid-call-disconnect path call into it, rather than each having their
+  own logic.
+- **Durable delay, not a timer**: a Redis sorted set
+  (`recovery:scheduled`, score = due-at unix timestamp) — not
+  `asyncio.sleep()`, not an in-memory list. `ZREM`'s return value is
+  the atomic multi-worker claim.
+- **Reuses the existing dialer entirely**: a due recovery job is just a
+  `DialJob` (with `recovery_type`/`previous_attempt_id` set) pushed onto
+  the same `calls:outbound` stream — there is no second dialer.
+- **Paused campaign / closed calling window**: neither terminalizes a
+  pending retry — the dispatcher reschedules it (to a short recheck
+  interval, or to the window's reopening time) rather than dropping it.
+
 
 ## AI conversation architecture (Checkpoint 04)
 
