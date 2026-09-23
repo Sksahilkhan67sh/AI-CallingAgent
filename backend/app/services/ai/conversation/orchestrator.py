@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.call_attempt import CallAttempt
+from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import CallEvent, ConversationMessage, ConversationSession
 from app.models.enums import (
@@ -25,6 +26,7 @@ from app.models.enums import (
     ConversationRole,
     ConversationSessionStatus,
     Intent,
+    MidCallDisconnectReason,
     NextAction,
     SuppressionSource,
 )
@@ -39,6 +41,8 @@ from app.services.ai.policy.engine import PolicyEngine
 from app.services.ai.schemas import Entities, StructuredOutput, TurnContext
 from app.services.ai.stt.base import StreamingSTT, TranscriptEvent
 from app.services.ai.tts.base import TTS, TTSProviderError, TTSTimeoutError
+from app.services.recovery.factory import get_recovery_scheduler
+from app.services.recovery.manager import RecoveryManager
 
 logger = logging.getLogger("ai.conversation")
 
@@ -74,6 +78,7 @@ class ConversationOrchestrator:
         brand_name: str,
         agent_config=None,
         is_reconnect: bool = False,
+        previous_attempt_id: str | None = None,
     ) -> None:
         self.db = db
         self.call_attempt = call_attempt
@@ -92,6 +97,11 @@ class ConversationOrchestrator:
             attempt_id=str(call_attempt.id), contact_id=str(contact.id)
         )
         self._is_reconnect = is_reconnect
+        # Checkpoint 05: a retry creates a NEW CallAttempt, so the memory
+        # to restore was checkpointed under the *previous* attempt's ID,
+        # not this one. Falls back to the current attempt (CP04's
+        # original same-attempt-reconnect case) when not given.
+        self._memory_source_attempt_id = previous_attempt_id or str(call_attempt.id)
         self._sequence = 0
         self._generation = 0
         self._consecutive_declines = 0
@@ -106,10 +116,12 @@ class ConversationOrchestrator:
     def start(self) -> None:
         """Step 5/42: initialize the session once the call is Connected."""
         existing_memory = self.memory_store.load_latest(
-            str(self.call_attempt.id), str(self.contact.id)
+            self._memory_source_attempt_id, str(self.contact.id)
         )
         if existing_memory is not None and self._is_reconnect:
             self.memory = existing_memory
+            # now checkpointed under the new attempt, not the old one
+            self.memory.attempt_id = str(self.call_attempt.id)
             self.memory.disconnect_count += 1
         elif self.agent_config is not None and self.agent_config.required_entity_fields:
             # Step 11/28: script_progress.pending_points seeds from the
@@ -388,6 +400,46 @@ class ConversationOrchestrator:
             return 0.0
         started = self.session.started_at
         return (datetime.now(UTC) - started).total_seconds()
+
+    def handle_disconnect(self, reason: MidCallDisconnectReason) -> None:
+        """Checkpoint 05: the call itself dropped mid-conversation --
+        distinct from `_end_conversation`'s graceful, policy-driven
+        endings (opt-out, goal met, max turns/duration). Sets the
+        CallAttempt to DroppedMidCall with the given reason, checkpoints
+        memory one last time, ends the session, and hands off to
+        RecoveryManager for the retry/terminal decision -- this method
+        never decides that itself (single owner, per CP05 §4)."""
+        if self.ended:
+            return
+        self.ended = True
+        self.end_reason = f"disconnected:{reason.value}"
+
+        self.memory.disconnect_count += 1
+        self.memory_store.checkpoint(self.memory)
+        self._log_event("conversation_disconnected", {"reason": reason.value})
+
+        if self.session is not None:
+            self.session.status = ConversationSessionStatus.ENDED
+            self.session.ended_at = datetime.now(UTC)
+
+        self.call_attempt.state = CallAttemptState.DROPPED_MID_CALL
+        self.call_attempt.disconnect_reason = reason
+        self.call_attempt.ended_at = datetime.now(UTC)
+        self.call_attempt.recording_consent = self.memory.recording_consent
+        self.contact.status = ContactStatus.DISCONNECTED
+
+        self.shutdown()
+        self.db.flush()
+
+        campaign = self.db.get(Campaign, self.contact.campaign_id)
+        if campaign is not None:
+            RecoveryManager(self.db, get_recovery_scheduler()).handle_disconnect(
+                self.call_attempt,
+                self.contact,
+                campaign,
+                never_connected=False,
+                reason_key=reason.value,
+            )
 
     def _end_conversation(self, reason: str) -> None:
         """Step 43: stop streams, persist final memory/messages/event,

@@ -87,7 +87,14 @@ class DialEligibilityService:
                 False, f"Campaign is {campaign.status.value}, not active"
             )
 
-        if contact.status not in (ContactStatus.PENDING, ContactStatus.DIALING):
+        # RetryScheduled: Checkpoint 05's RecoveryManager sets this
+        # right before scheduling a retry -- it's a legitimate pre-dial
+        # status, not just Pending/Dialing from a first attempt.
+        if contact.status not in (
+            ContactStatus.PENDING,
+            ContactStatus.DIALING,
+            ContactStatus.RETRY_SCHEDULED,
+        ):
             return EligibilityResult(
                 False, f"Contact is {contact.status.value}, not eligible to dial"
             )

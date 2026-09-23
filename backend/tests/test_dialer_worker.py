@@ -227,8 +227,13 @@ def test_provider_failure_persists_never_connected_reason(db_session, redis_clie
     assert attempt.state.value == "FailedToConnect"
     assert attempt.connection_failure_reason == NeverConnectedFailureReason.NO_ANSWER
     assert attempt.ended_at is not None
-    # Contact stays at Dialing -- see docs/CHECKPOINT-03-NOTES.md
-    assert contact.status == ContactStatus.DIALING
+    # Checkpoint 05: never-connected failures now go through
+    # RecoveryManager. This test's campaign has no RetryPolicy row, so
+    # the conservative "no policy configured -> no retry" default
+    # applies and the contact is terminalized -- see
+    # tests/test_recovery_manager.py for the full retry-decision matrix
+    # when a RetryPolicy *is* configured.
+    assert contact.status == ContactStatus.COMPLETED_PARTIAL
 
 
 def test_ambiguous_outcome_reconciles_to_existing_call(db_session, redis_client, provider):
