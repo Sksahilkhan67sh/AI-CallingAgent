@@ -78,6 +78,25 @@ class Settings(BaseSettings):
     tts_provider: str = "mock"
     audio_gateway_provider: str = "mock"
 
+    # --- Post-call intelligence (Checkpoint 06) ---
+    # "mock" is the only supported value until real credentials exist,
+    # same convention as the CP04 providers above.
+    analysis_llm_provider: str = "mock"
+    analysis_stream_key: str = "analysis:jobs"
+    analysis_consumer_group: str = "analysis-workers"
+    # Idle time before a crashed analysis worker's unacked job is
+    # reclaimed by another worker (mirrors queue_reclaim_idle_ms), and
+    # also the effective backoff window between bounded retry attempts
+    # for a transiently-failed analysis (Checkpoint 06 §21-22).
+    analysis_reclaim_idle_ms: int = 60_000
+    analysis_max_attempts: int = 3
+    analysis_prompt_version: str = "POST_CALL_ANALYSIS_V1"
+    analysis_version: str = "v1"
+    # Cost control (§30): bound how much transcript is sent to the LLM.
+    # Truncation preserves the beginning, the ending, and a sample of
+    # the middle -- see app/services/analysis/transcript.py.
+    analysis_max_transcript_messages: int = 200
+
 
 @lru_cache
 def get_settings() -> Settings:

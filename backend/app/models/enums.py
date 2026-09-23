@@ -135,3 +135,61 @@ class NextAction(str, enum.Enum):
     ESCALATE_TO_HUMAN_OFFER = "escalate_to_human_offer"
     END_CALL_POLITE = "end_call_polite"
     END_CALL_GOAL_MET = "end_call_goal_met"
+
+
+class AnalysisStatus(str, enum.Enum):
+    """Checkpoint 06 §5 -- CallAnalysis lifecycle.
+
+    PENDING -> PROCESSING -> COMPLETED, or PROCESSING -> FAILED (retried,
+    bounded by CallAnalysis.attempt_count, back to PROCESSING). COMPLETED
+    is terminal -- never transitions back to PROCESSING without an
+    explicit administrative reprocessing workflow, which this checkpoint
+    does not implement (Checkpoint 06 §29).
+    """
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AnalysisIntent(str, enum.Enum):
+    """Checkpoint 06 §12 -- call-level intent classification. Distinct
+    from `Intent` (Checkpoint 04's per-turn conversation intent)."""
+
+    INTERESTED = "interested"
+    NOT_INTERESTED = "not_interested"
+    INFORMATION_REQUESTED = "information_requested"
+    CALLBACK_REQUESTED = "callback_requested"
+    UNCLEAR = "unclear"
+
+
+class InterestStatus(str, enum.Enum):
+    """Checkpoint 06 §16."""
+
+    INTERESTED = "interested"
+    MAYBE = "maybe"
+    NOT_INTERESTED = "not_interested"
+    UNKNOWN = "unknown"
+
+
+class AnalysisSentiment(str, enum.Enum):
+    """Checkpoint 06 §12."""
+
+    POSITIVE = "positive"
+    NEUTRAL = "neutral"
+    NEGATIVE = "negative"
+    MIXED = "mixed"
+    UNKNOWN = "unknown"
+
+
+class AnalysisNextAction(str, enum.Enum):
+    """Checkpoint 06 §18 -- informational/business-workflow output only.
+    Does not itself trigger any call/retry infrastructure action."""
+
+    FOLLOW_UP = "follow_up"
+    CALLBACK = "callback"
+    SEND_INFORMATION = "send_information"
+    SALES_CONTACT = "sales_contact"
+    NO_ACTION = "no_action"
+    MANUAL_REVIEW = "manual_review"

@@ -56,6 +56,21 @@ services:
       redis:
         condition: service_healthy
 
+  analysis-worker:
+    build: ./backend
+    command: ["python", "-m", "app.analysis_worker"]
+    env_file:
+      - ./backend/.env.example
+    environment:
+      - LOG_LEVEL=debug
+      - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   frontend:
     build: ./frontend
     ports:

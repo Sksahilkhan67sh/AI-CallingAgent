@@ -41,6 +41,7 @@ from app.services.ai.policy.engine import PolicyEngine
 from app.services.ai.schemas import Entities, StructuredOutput, TurnContext
 from app.services.ai.stt.base import StreamingSTT, TranscriptEvent
 from app.services.ai.tts.base import TTS, TTSProviderError, TTSTimeoutError
+from app.services.analysis.admission import enqueue_call_analysis
 from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.manager import RecoveryManager
 
@@ -472,3 +473,9 @@ class ConversationOrchestrator:
 
         self.shutdown()
         self.db.flush()
+
+        # Checkpoint 06: admission is the single owner of the eligibility
+        # decision (state == Connected-reaching + contact status
+        # Completed/CompletedPartial) -- called unconditionally here,
+        # including for the opt_out branch, which it correctly excludes.
+        enqueue_call_analysis(self.db, self.call_attempt, self.contact)

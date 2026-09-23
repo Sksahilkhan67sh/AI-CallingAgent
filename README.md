@@ -8,26 +8,84 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
-**Checkpoint 05 — Recovery & Reconnection Engine.** Adds what happens
-when a call disconnects mid-conversation or never connects: a single
-`RecoveryManager` decides, deterministically, whether to retry (per the
-existing `RetryPolicy` — max 2 retries, 30s/10min spacing) or
-terminalize, schedules due retries on a Redis-backed durable delay
-queue, and hands the actual redial to the *existing* Checkpoint 03
-dialer — no second queue or dialer. A reconnected call restores the
-previous attempt's structured working memory (not its transcript, kept
-separate per Checkpoint 04's own rule) and continues the conversation.
-Opt-out, suppression, a paused campaign, or a closed calling window all
-correctly prevent or defer a retry without ever creating a duplicate
-call. See `docs/CHECKPOINT-05-NOTES.md` for the full reasoning.
+**Checkpoint 06 — Post-Call Intelligence.** After a call reaches a
+terminal outcome, an async pipeline analyzes the completed conversation
+and produces structured intelligence: summary, intent, interest status,
+sentiment, feedback, a deterministic 0-100 lead score, next action, and
+key facts/objections/customer needs. Admission is a single function
+called from the two places a call already reaches a terminal state
+(Checkpoint 04's `_end_conversation`, Checkpoint 05's `_terminalize`),
+using the existing `CallAttemptState`/`ContactStatus` model rather than
+a new one — a never-connected call or an opted-out call is correctly
+never analyzed. Analysis runs on its own Redis Stream and worker pool,
+entirely decoupled from calling/retry infrastructure: an analysis
+failure never redials, never touches `RecoveryManager`, and never
+changes campaign or suppression state. See `docs/CHECKPOINT-06-NOTES.md`
+for the full reasoning, including a spec/CP05-code discrepancy this
+checkpoint had to reconcile without redesigning CP05.
 
-Earlier checkpoints: the real-time AI voice conversation engine
-(Checkpoint 04), the durable outbound queue + dialer (Checkpoint 03),
-contacts/campaigns CRUD + bulk import + campaign membership (Checkpoint
-02), a hardened Postgres schema (Checkpoint 01A), and the
-FastAPI/database foundation (Checkpoints 00-01). See
-`docs/CHECKPOINT-0*-NOTES.md` for the reasoning behind schema and
-scope decisions made along the way.
+Earlier checkpoints: retry/reconnection recovery (Checkpoint 05), the
+real-time AI voice conversation engine (Checkpoint 04), the durable
+outbound queue + dialer (Checkpoint 03), contacts/campaigns CRUD + bulk
+import + campaign membership (Checkpoint 02), a hardened Postgres
+schema (Checkpoint 01A), and the FastAPI/database foundation
+(Checkpoints 00-01). See `docs/CHECKPOINT-0*-NOTES.md` for the
+reasoning behind schema and scope decisions made along the way.
+
+## Post-call intelligence architecture (Checkpoint 06)
+
+```
+Terminal call (orchestrator._end_conversation / recovery._terminalize)
+                        |
+              Analysis Admission (single function,
+          eligibility from existing CallAttemptState/
+                    ContactStatus, no new states)
+                        |
+        Analysis Queue (Redis Stream "analysis:jobs",
+              separate from calls:outbound)
+                        |
+                 Analysis Worker(s)
+      (python -m app.analysis_worker, horizontal pool)
+                        |
+        Load ConversationSession/Message from Postgres
+                        |
+             Transcript preparation (normalize,
+           bound size, never mutate the original)
+                        |
+              LLM analysis -> structured contract
+           (summary, intent, interest, sentiment,
+              next_action, scoring signals)
+                        |
+         Deterministic scoring (LLM signals -> 0-100,
+                 documented fixed weights)
+                        |
+       Persist CallAnalysis (idempotent, UNIQUE on
+                  call_attempt_id)
+                        |
+        CallEvent + AuditLog -> ACK
+```
+
+- **One eligibility owner**: `enqueue_call_analysis` is the only place
+  this decision is made, called unconditionally from both terminal
+  transition sites, self-filtering on `call_attempt.state`/
+  `contact.status` rather than each call site special-casing it.
+- **Postgres-authoritative idempotency**: an atomic conditional
+  `UPDATE ... WHERE status IN (PENDING, FAILED) RETURNING id` is the
+  worker-side claim; a unique constraint backstops admission-side
+  duplicates — same "DB decides the race" pattern as CP03/CP05.
+- **Retry/backoff without a second delay queue**: a transiently-failed
+  job is left unacked; `AnalysisQueue.reclaim_stale`'s existing
+  crash-recovery `XAUTOCLAIM` mechanism doubles as the backoff window,
+  bounded by a persisted `attempt_count` cap so it's never retried
+  indefinitely.
+- **Fully decoupled from calling infrastructure**: nothing under
+  `app/services/analysis/` imports `RecoveryManager`, schedules a
+  retry, or writes to `CallAttempt`/`Contact.status`/`suppression`.
+- **Providers**: `ANALYSIS_LLM_PROVIDER` — `mock` is the only supported
+  value until real credentials exist, same convention as Checkpoint
+  04's providers.
+
+
 
 ## Recovery architecture (Checkpoint 05)
 
@@ -200,6 +258,12 @@ Run the calling worker (separate process, same environment):
 python -m app.worker
 ```
 
+Run the post-call analysis worker (separate process, same environment):
+
+```bash
+python -m app.analysis_worker
+```
+
 Tests run against a real Postgres database (default: `ai_calling_agent_test`,
 create it once with `createdb ai_calling_agent_test` and `alembic upgrade head`
 against it) and a real Redis database (index 1, separate from the dev
@@ -226,8 +290,8 @@ Tests: `npm test` · Lint: `npm run lint` · Types: `npx tsc --noEmit` · Build:
 docker compose up --build
 ```
 
-Starts Postgres, Redis, the backend on :8000, a calling worker, and the
-frontend on :3000.
+Starts Postgres, Redis, the backend on :8000, a calling worker, an
+analysis worker, and the frontend on :3000.
 
 ## Configuration
 

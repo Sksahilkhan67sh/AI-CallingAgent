@@ -8,6 +8,7 @@ Import every model module here so Alembic's autogenerate (which inspects
 from app.models.agent_config import AgentConfig
 from app.models.audit_log import AuditLog
 from app.models.base import Base
+from app.models.call_analysis import CallAnalysis
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -24,6 +25,7 @@ __all__ = [
     "RetryPolicy",
     "Contact",
     "CallAttempt",
+    "CallAnalysis",
     "Suppression",
     "AuditLog",
     "ProcessedEvent",
