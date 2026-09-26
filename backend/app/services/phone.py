@@ -32,3 +32,15 @@ def normalize_phone_number(raw: str) -> str:
         raise InvalidPhoneNumberError(f"'{raw}' is not a valid phone number")
 
     return normalized
+
+
+def mask_phone_number(normalized: str) -> str:
+    """Checkpoint 07 §13: admin dashboard list/detail views show a
+    masked number by default (e.g. +1******1234) -- only the country
+    code and the last 4 digits stay visible."""
+    if len(normalized) <= 6:
+        return "*" * len(normalized)
+    country_and_lead = normalized[:2]  # "+1", "+9" etc.
+    last_four = normalized[-4:]
+    masked_middle = "*" * (len(normalized) - len(country_and_lead) - len(last_four))
+    return f"{country_and_lead}{masked_middle}{last_four}"

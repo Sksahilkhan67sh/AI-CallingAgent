@@ -35,6 +35,24 @@ class Settings(BaseSettings):
     jwt_expiry_seconds: int = 3600
     api_rate_limit_per_minute: int = 60
 
+    # --- Admin dashboard auth (Checkpoint 07) ---
+    # No user table/registration flow -- two fixed operator identities,
+    # same "env-configured secret, dev-only-insecure default" convention
+    # already used for telephony_webhook_secret. JWTs are signed with
+    # the jwt_signing_key setting above, which existed but was unused
+    # until this checkpoint.
+    admin_username: str = "admin"
+    admin_password: str = "dev-only-insecure-admin-password-change-me"
+    operator_username: str = "operator"
+    operator_password: str = "dev-only-insecure-operator-password-change-me"
+    # Origins the browser-based admin dashboard is served from.
+    admin_cors_origins: list[str] = ["http://localhost:3000"]
+    # Best-effort liveness signal for the system health page (§25) --
+    # each worker loop touches its own key; a missing/expired key means
+    # "no worker has run a loop iteration within this window", not a
+    # guaranteed crash (see docs/CHECKPOINT-07-NOTES.md).
+    worker_heartbeat_ttl_seconds: int = 30
+
     # --- Database & data layer (Environment-Config.md §2.1) ---
     primary_db_url: str = (
         "postgresql+psycopg://postgres:postgres@localhost:5432/ai_calling_agent"

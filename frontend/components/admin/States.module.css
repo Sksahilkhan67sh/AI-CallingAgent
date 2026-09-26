@@ -1,0 +1,67 @@
+.skeletonTable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+.skeletonRow {
+  display: flex;
+  gap: var(--space-5);
+}
+
+.skeletonCell {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.empty,
+.error {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.emptyTitle {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.emptyHint {
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.errorTitle {
+  color: var(--color-danger);
+  font-size: 14px;
+}
+
+.retryButton {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.retryButton:hover {
+  background: var(--color-surface-sunken);
+}

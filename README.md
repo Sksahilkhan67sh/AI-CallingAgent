@@ -8,6 +8,21 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
+**Checkpoint 07 — Admin Dashboard.** A Next.js operations dashboard
+over the existing backend: campaign/contact/call monitoring, a
+transcript viewer, the Checkpoint 06 AI intelligence panel (summary,
+intent, interest, sentiment, lead score, next action), Checkpoint 05
+retry/recovery history, time-ranged analytics, and system/queue health.
+Served entirely from a new authenticated `/api/v1/admin/*` API surface
+(JWT-based admin/operator auth) that wraps the existing service layer
+rather than duplicating it or retrofitting auth onto the pre-existing
+public endpoints. Phone numbers are always masked; every list is
+server-side paginated/filtered; every aggregate metric is computed in
+Postgres, never assembled by downloading rows into the browser. See
+`docs/CHECKPOINT-07-NOTES.md` for the full reasoning, including the
+authentication-surface decision and known limitations (no real-time
+transport, no free-text search, no tenant model).
+
 **Checkpoint 06 — Post-Call Intelligence.** After a call reaches a
 terminal outcome, an async pipeline analyzes the completed conversation
 and produces structured intelligence: summary, intent, interest status,
@@ -31,6 +46,25 @@ import + campaign membership (Checkpoint 02), a hardened Postgres
 schema (Checkpoint 01A), and the FastAPI/database foundation
 (Checkpoints 00-01). See `docs/CHECKPOINT-0*-NOTES.md` for the
 reasoning behind schema and scope decisions made along the way.
+
+## Admin dashboard (Checkpoint 07)
+
+Run the backend and frontend (see Local development below), then:
+
+```bash
+open http://localhost:3000
+```
+
+Default dev credentials (see `backend/.env.example` --
+`ADMIN_USERNAME`/`ADMIN_PASSWORD`/`OPERATOR_USERNAME`/
+`OPERATOR_PASSWORD`, dev-only-insecure defaults, same convention as the
+existing `TELEPHONY_WEBHOOK_SECRET`):
+
+- Admin: `admin` / `dev-only-insecure-admin-password-change-me`
+- Operator: `operator` / `dev-only-insecure-operator-password-change-me`
+
+Admin can also transition a campaign's status (activate/pause/resume);
+operator is read-only across every page.
 
 ## Post-call intelligence architecture (Checkpoint 06)
 
@@ -276,7 +310,7 @@ Tests: `pytest` · Lint: `ruff check .` · Types: `mypy app` · Migrations: `ale
 
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps  # pre-existing vitest/@types/node peer conflict in the scaffold, see docs/CHECKPOINT-07-NOTES.md §17
 cp .env.example .env.local
 npm run dev
 # http://localhost:3000

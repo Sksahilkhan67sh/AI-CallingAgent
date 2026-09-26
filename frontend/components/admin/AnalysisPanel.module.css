@@ -1,0 +1,78 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.summary {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.leadScore {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.leadScoreMax {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-faint);
+}
+
+.block p {
+  font-size: 13px;
+  color: var(--color-text);
+  margin-top: 2px;
+}
+
+.list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.list li {
+  margin-bottom: 2px;
+}
+
+.version {
+  font-size: 11px;
+  color: var(--color-text-faint);
+}
+
+.pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.pendingHint {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
