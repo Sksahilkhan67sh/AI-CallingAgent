@@ -10,10 +10,12 @@ import logging
 import signal
 import socket
 import uuid
+from datetime import UTC, datetime
 from types import FrameType
 
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis
+from app.services.admin.system_service import DIALER_HEARTBEAT_KEY
 from app.services.queue.dialer_worker import JobOutcome, process_one_job
 from app.services.queue.factory import get_admission_controller, get_queue
 from app.services.recovery.dispatch import dispatch_due_recovery_jobs
@@ -30,6 +32,19 @@ _shutdown_requested = False
 # jobs that have come due -- not on every iteration, same reasoning as
 # the existing stale-job-reclaim cadence below.
 _RECOVERY_DISPATCH_EVERY_N_ITERATIONS = 10
+
+
+def _write_heartbeat() -> None:
+    try:
+        from app.core.config import get_settings
+
+        get_redis().set(
+            DIALER_HEARTBEAT_KEY,
+            datetime.now(UTC).isoformat(),
+            ex=get_settings().worker_heartbeat_ttl_seconds,
+        )
+    except Exception:
+        logger.exception("heartbeat_write_failed")
 
 
 def _handle_shutdown_signal(signum: int, frame: FrameType | None) -> None:
@@ -85,6 +100,12 @@ def run() -> None:
                 db.commit()
                 if outcome != JobOutcome.NO_JOB:
                     logger.info("job_processed", extra={"outcome": outcome})
+
+                # Checkpoint 07 §25: best-effort liveness signal for the
+                # admin dashboard's system page -- a lightweight addition,
+                # not a new observability backend. See
+                # app/services/admin/system_service.py.
+                _write_heartbeat()
             except Exception:
                 db.rollback()
                 logger.exception("job_processing_error")

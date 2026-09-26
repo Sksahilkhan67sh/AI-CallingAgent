@@ -1,0 +1,35 @@
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.item {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.type {
+  font-size: 13px;
+  color: var(--color-text);
+  text-transform: capitalize;
+}
+
+.time {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  margin-top: 1px;
+}
