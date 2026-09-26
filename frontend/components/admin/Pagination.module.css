@@ -1,0 +1,37 @@
+.wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--space-4);
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pageLabel {
+  min-width: 90px;
+  text-align: center;
+}
+
+.button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+.button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

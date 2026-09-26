@@ -19,11 +19,13 @@ import logging
 import signal
 import socket
 import uuid
+from datetime import UTC, datetime
 from types import FrameType
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis
+from app.services.admin.system_service import ANALYSIS_HEARTBEAT_KEY
 from app.services.analysis.factory import get_analysis_queue
 from app.services.analysis.llm.factory import get_analysis_llm_provider
 from app.services.analysis.worker import (
@@ -36,6 +38,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("analysis_worker")
 
 _shutdown_requested = False
+
+
+def _write_heartbeat() -> None:
+    try:
+        get_redis().set(
+            ANALYSIS_HEARTBEAT_KEY,
+            datetime.now(UTC).isoformat(),
+            ex=get_settings().worker_heartbeat_ttl_seconds,
+        )
+    except Exception:
+        logger.exception("heartbeat_write_failed")
 
 
 def _handle_shutdown_signal(signum: int, frame: FrameType | None) -> None:
@@ -84,6 +97,8 @@ def run() -> None:
                 db.commit()
                 if outcome != AnalysisJobOutcome.NO_JOB:
                     logger.info("analysis_job_processed", extra={"outcome": outcome})
+
+                _write_heartbeat()
             except Exception:
                 db.rollback()
                 logger.exception("analysis_job_processing_error")

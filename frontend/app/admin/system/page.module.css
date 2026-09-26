@@ -1,0 +1,5 @@
+.loading {
+  padding: var(--space-6) 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
