@@ -1,0 +1,13 @@
+# Force LF line endings on checkout for files that get executed
+# inside a Linux container or interpreted by a POSIX shell, regardless
+# of a Windows checkout's core.autocrlf setting. Without this, a
+# Windows clone can silently convert *.sh to CRLF, which breaks a
+# script's shebang line when Docker COPYs it verbatim into a Linux
+# image ("exec: no such file or directory" -- a script that visibly
+# exists but whose interpreter path now ends in \r).
+*.sh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+*.py text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
