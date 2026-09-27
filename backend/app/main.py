@@ -13,6 +13,7 @@ from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.call_analysis import router as call_analysis_router
 from app.api.routes.campaigns import router as campaigns_router
 from app.api.routes.contacts import router as contacts_router
+from app.api.routes.dograh_webhook import router as dograh_webhook_router
 from app.api.routes.health import router as health_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.core.config import get_settings
@@ -38,6 +39,7 @@ app.include_router(health_router)
 app.include_router(contacts_router)
 app.include_router(campaigns_router)
 app.include_router(webhooks_router)
+app.include_router(dograh_webhook_router)
 app.include_router(call_analysis_router)
 app.include_router(admin_auth_router)
 app.include_router(admin_dashboard_router)

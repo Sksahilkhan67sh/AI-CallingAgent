@@ -8,6 +8,24 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
+**Checkpoint 08 — Dograh Integration.** Adds an alternative calling
+engine: `CALLING_ENGINE=dograh` delegates telephony, STT, LLM, and TTS
+entirely to a separately-run [Dograh](https://www.dograh.com/)
+instance (a self-hosted, open-source voice-agent platform) instead of
+this project's own Checkpoint 03/04 provider stack. This repository
+only implements the two-way integration surface: triggering a call via
+Dograh's public API, and a new webhook receiving Dograh's call outcome
+-- which is then routed into the *existing, unchanged* Checkpoint 05
+recovery and Checkpoint 06 analysis pipelines, exactly as a native call
+would be. `CALLING_ENGINE=native` (default) leaves every earlier
+checkpoint completely untouched. See `docs/CHECKPOINT-08-NOTES.md` for
+the full contract (built by reading Dograh's actual source/docs, not
+guessed), the exact webhook payload template to configure in Dograh,
+and a manual setup checklist for the parts that live entirely in
+Dograh's own UI (deploying it, configuring its telephony/model
+credentials, and building the actual conversation workflow -- none of
+which this repository can do for you).
+
 **Checkpoint 07 — Admin Dashboard.** A Next.js operations dashboard
 over the existing backend: campaign/contact/call monitoring, a
 transcript viewer, the Checkpoint 06 AI intelligence panel (summary,
@@ -65,6 +83,20 @@ existing `TELEPHONY_WEBHOOK_SECRET`):
 
 Admin can also transition a campaign's status (activate/pause/resume);
 operator is read-only across every page.
+
+## Dograh integration (Checkpoint 08)
+
+By default (`CALLING_ENGINE=native`) this project runs its own
+telephony/STT/LLM/TTS stack (currently `mock` providers, per
+Checkpoint 04). Setting `CALLING_ENGINE=dograh` instead delegates all
+of that to a separately-run [Dograh](https://www.dograh.com/) instance.
+This requires deploying Dograh yourself (it is **not** part of this
+project's `docker-compose.yml` -- see why in
+`docs/CHECKPOINT-08-NOTES.md`) and completing a short manual setup
+checklist in Dograh's own UI (building a workflow, adding an API
+Trigger node and a Webhook node with a specific payload template).
+See `docs/CHECKPOINT-08-NOTES.md` for the full contract and checklist
+before setting `CALLING_ENGINE=dograh`.
 
 ## Post-call intelligence architecture (Checkpoint 06)
 
