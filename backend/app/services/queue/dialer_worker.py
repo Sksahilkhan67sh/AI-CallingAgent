@@ -168,6 +168,18 @@ def _place_call(
     attempt: CallAttempt,
     job: DialJob,
 ) -> None:
+    from app.core.config import get_settings
+
+    if get_settings().calling_engine == "dograh":
+        # Checkpoint 08: telephony + STT + LLM + TTS all happen inside
+        # Dograh's own pipeline once triggered -- there is no live
+        # audio connection for our own ConversationOrchestrator to
+        # drive, so _start_conversation_safely is deliberately never
+        # called on this path. The call's outcome arrives later, once,
+        # via app/api/routes/dograh_webhook.py.
+        _place_call_via_dograh(db, contact, attempt, job)
+        return
+
     result = provider.create_outbound_call(
         to_number=contact.normalized_phone_number, idempotency_key=job.idempotency_key
     )
@@ -203,6 +215,79 @@ def _place_call(
             _handle_never_connected_failure(db, attempt, contact, result.failure_reason)
 
     db.flush()
+
+
+def _place_call_via_dograh(
+    db: Session, contact: Contact, attempt: CallAttempt, job: DialJob
+) -> None:
+    """Checkpoint 08: one HTTP call replaces both `create_outbound_call`
+    and the conversation-start step above -- Dograh runs the entire
+    call (dial, STT, LLM, TTS) autonomously once triggered. Our
+    `call_attempt_id` is round-tripped through Dograh's
+    `initial_context`, which Dograh echoes back in its webhook payload
+    (see app/api/routes/dograh_webhook.py) -- that's how the webhook
+    correlates back to this specific CallAttempt with no shared
+    database between the two systems.
+    """
+    from app.services.telephony.dograh_client import DograhApiError, DograhConfigurationError
+    from app.services.telephony.factory import get_dograh_client
+
+    campaign = db.get(Campaign, contact.campaign_id)
+    initial_context = {
+        "call_attempt_id": str(attempt.id),
+        "contact_id": str(contact.id),
+        "campaign_id": str(contact.campaign_id),
+        "campaign_name": campaign.name if campaign is not None else "",
+    }
+
+    try:
+        client = get_dograh_client()
+        result = client.trigger_call(
+            phone_number=contact.normalized_phone_number, initial_context=initial_context
+        )
+    except DograhConfigurationError:
+        logger.exception("dograh_not_configured", extra={"attempt_id": str(attempt.id)})
+        attempt.provider = "dograh"
+        attempt.state = CallAttemptState.FAILED_TO_CONNECT
+        attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
+        attempt.ended_at = datetime.now(UTC)
+        db.flush()
+        return
+    except DograhApiError as exc:
+        logger.warning(
+            "dograh_trigger_failed",
+            extra={"attempt_id": str(attempt.id), "status_code": exc.status_code},
+        )
+        attempt.provider = "dograh"
+        attempt.state = CallAttemptState.FAILED_TO_CONNECT
+        attempt.connection_failure_reason = _classify_dograh_trigger_failure(exc.status_code)
+        attempt.ended_at = datetime.now(UTC)
+        db.flush()
+        _handle_never_connected_failure(
+            db, attempt, contact, attempt.connection_failure_reason
+        )
+        return
+
+    attempt.provider = "dograh"
+    attempt.provider_call_id = str(result.workflow_run_id)
+    attempt.state = CallAttemptState.CONNECTED
+    contact.status = ContactStatus.IN_CONVERSATION
+    db.flush()
+    logger.info(
+        "dograh_call_triggered",
+        extra={"attempt_id": str(attempt.id), "workflow_run_id": result.workflow_run_id},
+    )
+
+
+def _classify_dograh_trigger_failure(status_code: int) -> NeverConnectedFailureReason:
+    """§Error responses in Dograh's own API Trigger reference: 400
+    (telephony not configured / call failed to initiate), 401/403
+    (auth), 404 (trigger not found). None of these map to a real
+    telephony-level reason (no_answer/busy/etc.) the way our own
+    provider's failures do -- Dograh never got far enough to dial for
+    any of them -- so they're all treated as PROVIDER_ERROR, the
+    generic bucket this enum already has for exactly this case."""
+    return NeverConnectedFailureReason.PROVIDER_ERROR
 
 
 def _start_conversation_safely(

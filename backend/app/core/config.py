@@ -96,6 +96,33 @@ class Settings(BaseSettings):
     tts_provider: str = "mock"
     audio_gateway_provider: str = "mock"
 
+    # --- Dograh integration (Checkpoint 08) ---
+    # calling_engine="native" keeps the existing Checkpoint 03/04 path
+    # (our own TelephonyProvider + StreamingSTT/LLM/TTS/AudioGateway,
+    # all still "mock" until real credentials exist -- see above).
+    # calling_engine="dograh" delegates telephony, STT, LLM, TTS, and
+    # the post-call webhook entirely to a self-hosted Dograh instance;
+    # see docs/CHECKPOINT-08-NOTES.md for what that instance itself
+    # still needs (a published workflow with an API Trigger node and a
+    # Webhook node, and its own telephony/model credentials -- none of
+    # that lives in this repository).
+    calling_engine: str = "native"
+    dograh_api_base_url: str = "http://localhost:8000"
+    dograh_api_key: str = ""
+    # The API Trigger node's UUID from the Dograh workflow (Settings ->
+    # the trigger node's dialog). Required when calling_engine="dograh".
+    dograh_trigger_uuid: str = ""
+    # "test" runs the workflow's latest draft; "production" requires
+    # the workflow to be published first. See Dograh's own API Trigger
+    # docs -- this is Dograh's distinction, not one we invented.
+    dograh_trigger_mode: str = "test"
+    dograh_request_timeout_seconds: float = 15.0
+    # Shared secret we tell Dograh's Webhook node to send back (as a
+    # Bearer token or an X-API-Key header, either is accepted) --
+    # same "env-configured secret, dev-only-insecure default"
+    # convention as telephony_webhook_secret.
+    dograh_webhook_secret: str = "dev-only-insecure-dograh-webhook-secret-change-me"
+
     # --- Post-call intelligence (Checkpoint 06) ---
     # "mock" is the only supported value until real credentials exist,
     # same convention as the CP04 providers above.
