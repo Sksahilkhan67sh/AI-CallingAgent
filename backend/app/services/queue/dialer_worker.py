@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
+from app.models.conversation import CallEvent
 from app.models.enums import CallAttemptState, ContactStatus, NeverConnectedFailureReason
 from app.models.retry_policy import RetryPolicy
 from app.repositories.call_attempt_repository import CallAttemptRepository
@@ -83,9 +84,17 @@ def _process(
     message_id: str,
     job: DialJob,
 ) -> str:
+    from app.core.config import get_settings
+
+    # Checkpoint 09 §5/§7: a Dograh-routed call must be admitted and
+    # circuit-broken under its own "dograh" key, never silently sharing
+    # the native provider's concurrency/CPS/circuit-breaker buckets --
+    # they are different external dependencies with independent health.
+    provider_name = "dograh" if get_settings().calling_engine == "dograh" else provider.name
+
     admitted = False
     for _ in range(_ADMISSION_RETRY_ATTEMPTS):
-        result = admission.try_admit(campaign_id=job.campaign_id, provider_name=provider.name)
+        result = admission.try_admit(campaign_id=job.campaign_id, provider_name=provider_name)
         if result.admitted:
             admitted = True
             break
@@ -100,7 +109,7 @@ def _process(
     try:
         return _dial(db, provider, circuit_breaker, job)
     finally:
-        admission.release(campaign_id=job.campaign_id, provider_name=provider.name)
+        admission.release(campaign_id=job.campaign_id, provider_name=provider_name)
         queue.ack(message_id)
 
 
@@ -220,7 +229,7 @@ def _place_call(
 def _place_call_via_dograh(
     db: Session, contact: Contact, attempt: CallAttempt, job: DialJob
 ) -> None:
-    """Checkpoint 08: one HTTP call replaces both `create_outbound_call`
+    """Checkpoint 08/09: one HTTP call replaces both `create_outbound_call`
     and the conversation-start step above -- Dograh runs the entire
     call (dial, STT, LLM, TTS) autonomously once triggered. Our
     `call_attempt_id` is round-tripped through Dograh's
@@ -228,8 +237,22 @@ def _place_call_via_dograh(
     (see app/api/routes/dograh_webhook.py) -- that's how the webhook
     correlates back to this specific CallAttempt with no shared
     database between the two systems.
+
+    Checkpoint 09 §2: a successful trigger response means Dograh
+    *accepted the job*, not that a phone connected -- `attempt.state`
+    deliberately stays at its default INITIATED and `contact.status`
+    stays DIALING (set by `_dial` just before this call). The only
+    lifecycle signal this integration ever receives is the single
+    completion webhook, which is what actually determines whether the
+    call connected at all (see dograh_webhook_service.py's three-way
+    classification).
     """
-    from app.services.telephony.dograh_client import DograhApiError, DograhConfigurationError
+    from app.core.redis_client import get_redis
+    from app.services.telephony.dograh_client import (
+        AMBIGUOUS_CATEGORIES,
+        DograhApiError,
+        DograhConfigurationError,
+    )
     from app.services.telephony.factory import get_dograh_client
 
     campaign = db.get(Campaign, contact.campaign_id)
@@ -239,6 +262,13 @@ def _place_call_via_dograh(
         "campaign_id": str(contact.campaign_id),
         "campaign_name": campaign.name if campaign is not None else "",
     }
+    log_extra = {
+        "attempt_id": str(attempt.id),
+        "contact_id": str(contact.id),
+        "campaign_id": str(contact.campaign_id),
+        "trace_id": job.trace_id,
+    }
+    dograh_breaker = CircuitBreaker(get_redis(), "dograh")
 
     try:
         client = get_dograh_client()
@@ -246,7 +276,7 @@ def _place_call_via_dograh(
             phone_number=contact.normalized_phone_number, initial_context=initial_context
         )
     except DograhConfigurationError:
-        logger.exception("dograh_not_configured", extra={"attempt_id": str(attempt.id)})
+        logger.exception("dograh_not_configured", extra=log_extra)
         attempt.provider = "dograh"
         attempt.state = CallAttemptState.FAILED_TO_CONNECT
         attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
@@ -254,40 +284,60 @@ def _place_call_via_dograh(
         db.flush()
         return
     except DograhApiError as exc:
+        dograh_breaker.record_failure()
+        is_ambiguous = exc.category in AMBIGUOUS_CATEGORIES
         logger.warning(
             "dograh_trigger_failed",
-            extra={"attempt_id": str(attempt.id), "status_code": exc.status_code},
+            extra={
+                **log_extra,
+                "status_code": exc.status_code,
+                "category": exc.category.value,
+                "ambiguous": is_ambiguous,
+            },
         )
         attempt.provider = "dograh"
         attempt.state = CallAttemptState.FAILED_TO_CONNECT
-        attempt.connection_failure_reason = _classify_dograh_trigger_failure(exc.status_code)
+        attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
         attempt.ended_at = datetime.now(UTC)
+        db.add(
+            CallEvent(
+                call_attempt_id=attempt.id,
+                event_type="DOGRAH_TRIGGER_AMBIGUOUS" if is_ambiguous else "DOGRAH_TRIGGER_FAILED",
+                payload={"status_code": exc.status_code, "category": exc.category.value},
+            )
+        )
         db.flush()
+        # Checkpoint 09 §1.3: an ambiguous outcome (the request may have
+        # reached Dograh before we lost the response) is *never*
+        # retried immediately -- it goes through the exact same
+        # RecoveryManager path as any other never-connected failure,
+        # which applies the normal 30s/10min backoff before a retry is
+        # even scheduled. No Dograh API capability for querying "was a
+        # run already created for this trigger" was found/verified in
+        # its published docs (Checkpoint 08's own research), so this
+        # backoff window -- not an active reconciliation call -- is
+        # what stands between an ambiguous timeout and a possible
+        # duplicate call. Documented as a known limitation, not
+        # silently assumed safe -- see docs/CHECKPOINT-09-NOTES.md.
         _handle_never_connected_failure(
             db, attempt, contact, attempt.connection_failure_reason
         )
         return
 
+    dograh_breaker.record_success()
     attempt.provider = "dograh"
     attempt.provider_call_id = str(result.workflow_run_id)
-    attempt.state = CallAttemptState.CONNECTED
-    contact.status = ContactStatus.IN_CONVERSATION
+    db.add(
+        CallEvent(
+            call_attempt_id=attempt.id,
+            event_type="DOGRAH_CALL_TRIGGERED",
+            payload={"workflow_run_id": result.workflow_run_id},
+        )
+    )
     db.flush()
     logger.info(
-        "dograh_call_triggered",
-        extra={"attempt_id": str(attempt.id), "workflow_run_id": result.workflow_run_id},
+        "dograh_call_triggered", extra={**log_extra, "workflow_run_id": result.workflow_run_id}
     )
-
-
-def _classify_dograh_trigger_failure(status_code: int) -> NeverConnectedFailureReason:
-    """§Error responses in Dograh's own API Trigger reference: 400
-    (telephony not configured / call failed to initiate), 401/403
-    (auth), 404 (trigger not found). None of these map to a real
-    telephony-level reason (no_answer/busy/etc.) the way our own
-    provider's failures do -- Dograh never got far enough to dial for
-    any of them -- so they're all treated as PROVIDER_ERROR, the
-    generic bucket this enum already has for exactly this case."""
-    return NeverConnectedFailureReason.PROVIDER_ERROR
 
 
 def _start_conversation_safely(

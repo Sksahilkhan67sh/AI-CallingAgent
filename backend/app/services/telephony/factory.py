@@ -33,5 +33,6 @@ def get_dograh_client() -> DograhClient:
         api_key=settings.dograh_api_key,
         trigger_uuid=settings.dograh_trigger_uuid,
         mode=settings.dograh_trigger_mode,
-        timeout=settings.dograh_request_timeout_seconds,
+        connect_timeout=settings.dograh_connect_timeout_seconds,
+        read_timeout=settings.dograh_read_timeout_seconds,
     )

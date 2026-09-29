@@ -117,7 +117,10 @@ class Settings(BaseSettings):
     # the workflow to be published first. See Dograh's own API Trigger
     # docs -- this is Dograh's distinction, not one we invented.
     dograh_trigger_mode: str = "test"
-    dograh_request_timeout_seconds: float = 15.0
+    # §1.2: bounded, independently-configurable connect vs. read
+    # timeouts -- see app/services/telephony/dograh_client.py.
+    dograh_connect_timeout_seconds: float = 5.0
+    dograh_read_timeout_seconds: float = 15.0
     # Shared secret we tell Dograh's Webhook node to send back (as a
     # Bearer token or an X-API-Key header, either is accepted) --
     # same "env-configured secret, dev-only-insecure default"
