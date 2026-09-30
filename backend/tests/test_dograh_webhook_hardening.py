@@ -215,5 +215,7 @@ def test_payload_tolerates_unknown_extra_fields(client, db_session):
 
 
 def test_schema_directly_rejects_empty_call_attempt_id():
-    with pytest.raises(Exception):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
         DograhWebhookPayload(call_attempt_id="")

@@ -72,10 +72,10 @@ def process_one_job(
         return JobOutcome.NO_JOB
 
     message_id, job = read
-    return _process(db, queue, admission, provider, circuit_breaker, message_id, job)
+    return process_claimed_job(db, queue, admission, provider, circuit_breaker, message_id, job)
 
 
-def _process(
+def process_claimed_job(
     db: Session,
     queue: RedisStreamQueue,
     admission: AdmissionController,
@@ -84,6 +84,23 @@ def _process(
     message_id: str,
     job: DialJob,
 ) -> str:
+    """Checkpoint 09 §4.3 -- processes one already-claimed delivery, used
+    both for a freshly read job (`process_one_job`) and for a job
+    handed back by `RedisStreamQueue.reclaim_stale` (a worker that
+    crashed after claiming it). Before this fix, `app/worker.py` called
+    `reclaim_stale` (which does XAUTOCLAIM, transferring ownership) but
+    never re-drove processing on what it returned -- the same
+    unexercised gap Checkpoint 06 found and fixed for the analysis
+    queue. A contact whose dialer worker crashed after claiming its job
+    would otherwise sit stuck forever, appearing merely "in progress."
+
+    Re-checks DB state via the normal `_dial` -> `DialEligibilityService`
+    path below before executing anything (§4.3: "re-check DB state
+    before execution") -- so a job reclaimed after the contact was
+    already dialed by a *different* recovered path, or became
+    ineligible in the meantime, is a safe no-op rather than a duplicate
+    call.
+    """
     from app.core.config import get_settings
 
     # Checkpoint 09 §5/§7: a Dograh-routed call must be admitted and
