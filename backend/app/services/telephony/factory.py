@@ -34,4 +34,6 @@ def get_dograh_client() -> DograhClient:
         trigger_uuid=settings.dograh_trigger_uuid,
         mode=settings.dograh_trigger_mode,
         timeout=settings.dograh_request_timeout_seconds,
+        connect_timeout=settings.dograh_connect_timeout_seconds,
+        workflow_id=settings.dograh_workflow_id,
     )

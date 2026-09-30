@@ -15,6 +15,7 @@ secrets manager -- never via committed files.
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +67,9 @@ class Settings(BaseSettings):
     # How long a claimed-but-unacked stream entry may sit idle before
     # another worker is allowed to reclaim it (a crashed worker's job).
     queue_reclaim_idle_ms: int = 30_000
+    # A job delivered this many times without being acked is dead-lettered.
+    queue_max_deliveries: int = 5
+    queue_dlq_stream_key: str = "calls:dlq"
 
     # Telephony provider selection -- "mock" is the only supported value
     # until real provider credentials exist (see
@@ -87,6 +91,12 @@ class Settings(BaseSettings):
     # Circuit breaker (per provider)
     circuit_breaker_error_threshold: int = 5
     circuit_breaker_open_seconds: int = 30
+    # Failures only count if they occur within this window of each other.
+    circuit_breaker_window_seconds: int = 60
+
+    # --- Rate limiting (per client IP, fixed window) ---
+    login_rate_limit_per_minute: int = 10
+    webhook_rate_limit_per_minute: int = 600
 
     # --- Real-time AI conversation (Checkpoint 04) ---
     # "mock" is the only supported value for each until real provider
@@ -117,6 +127,20 @@ class Settings(BaseSettings):
     # docs -- this is Dograh's distinction, not one we invented.
     dograh_trigger_mode: str = "test"
     dograh_request_timeout_seconds: float = 15.0
+    dograh_connect_timeout_seconds: float = 5.0
+    # Dograh's integer workflow id (needed to read runs back for
+    # reconciliation; the trigger UUID alone cannot address a run).
+    dograh_workflow_id: int | None = None
+    # An attempt with no confirmed Dograh run (ambiguous trigger) or no
+    # completion webhook is reconciled against Dograh after this long.
+    dograh_reconcile_after_seconds: int = 120
+    # A run Dograh still reports as in progress after this long is
+    # treated as lost and terminalized through RecoveryManager.
+    dograh_stale_attempt_seconds: int = 3600
+    # Hosts we may fetch transcripts from. Empty = any public host
+    # (private/loopback/link-local addresses are always refused unless
+    # the host is listed here, e.g. a self-hosted MinIO).
+    dograh_transcript_allowed_hosts: list[str] = []
     # Shared secret we tell Dograh's Webhook node to send back (as a
     # Bearer token or an X-API-Key header, either is accepted) --
     # same "env-configured secret, dev-only-insecure default"
@@ -141,6 +165,47 @@ class Settings(BaseSettings):
     # Truncation preserves the beginning, the ending, and a sample of
     # the middle -- see app/services/analysis/transcript.py.
     analysis_max_transcript_messages: int = 200
+
+
+    @model_validator(mode="after")
+    def _validate_production(self) -> "Settings":
+        """Fail fast in production on missing/unsafe configuration.
+        Reports variable NAMES only -- never values."""
+        if self.environment.lower() != "production":
+            return self
+        problems: list[str] = []
+        insecure_markers = ("dev-only", "change-me")
+
+        def weak(name: str, value: str) -> None:
+            if not value or any(m in value for m in insecure_markers):
+                problems.append(name)
+
+        weak("JWT_SIGNING_KEY", self.jwt_signing_key)
+        weak("ADMIN_PASSWORD", self.admin_password)
+        weak("OPERATOR_PASSWORD", self.operator_password)
+        weak("TELEPHONY_WEBHOOK_SECRET", self.telephony_webhook_secret)
+        if "postgres:postgres@" in self.primary_db_url or "localhost" in self.primary_db_url:
+            problems.append("PRIMARY_DB_URL")
+        if "localhost" in self.redis_url:
+            problems.append("REDIS_URL")
+        if self.log_level.lower() == "debug":
+            problems.append("LOG_LEVEL (debug not allowed in production)")
+        if self.calling_engine == "dograh":
+            weak("DOGRAH_WEBHOOK_SECRET", self.dograh_webhook_secret)
+            weak("DOGRAH_API_KEY", self.dograh_api_key)
+            if not self.dograh_trigger_uuid:
+                problems.append("DOGRAH_TRIGGER_UUID")
+            if self.dograh_workflow_id is None:
+                problems.append("DOGRAH_WORKFLOW_ID")
+            if "localhost" in self.dograh_api_base_url:
+                problems.append("DOGRAH_API_BASE_URL")
+            if self.dograh_trigger_mode != "production":
+                problems.append("DOGRAH_TRIGGER_MODE (must be 'production')")
+        if problems:
+            raise ValueError(
+                "Invalid production configuration; fix these variables: " + ", ".join(problems)
+            )
+        return self
 
 
 @lru_cache
