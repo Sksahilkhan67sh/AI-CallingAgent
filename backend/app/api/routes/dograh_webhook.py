@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.rate_limit import rate_limit_dependency
 from app.schemas.dograh_webhook import DograhWebhookPayload
 from app.services.telephony.dograh_webhook_service import (
     DograhWebhookError,
@@ -20,6 +21,14 @@ from app.services.telephony.dograh_webhook_service import (
 )
 
 router = APIRouter(prefix="/api/v1/webhooks/dograh", tags=["Dograh Webhook"])
+
+
+def _webhook_rate_limit():
+    return rate_limit_dependency(
+        limit=get_settings().webhook_rate_limit_per_minute,
+        window_seconds=60,
+        key_prefix="dograh_webhook",
+    )
 
 
 def _verify_secret(authorization: str | None, x_api_key: str | None) -> None:
@@ -41,7 +50,7 @@ def _verify_secret(authorization: str | None, x_api_key: str | None) -> None:
     )
 
 
-@router.post("/call-completed")
+@router.post("/call-completed", dependencies=[Depends(_webhook_rate_limit())])
 def dograh_call_completed(
     payload: DograhWebhookPayload,
     db: Session = Depends(get_db),

@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     # convention as telephony_webhook_secret.
     dograh_webhook_secret: str = "dev-only-insecure-dograh-webhook-secret-change-me"
 
+    # --- Rate limiting (Checkpoint 09 §8.5) ---
+    login_rate_limit_per_minute: int = 10
+    webhook_rate_limit_per_minute: int = 120
+
     # --- Post-call intelligence (Checkpoint 06) ---
     # "mock" is the only supported value until real credentials exist,
     # same convention as the CP04 providers above.
