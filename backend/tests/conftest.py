@@ -71,3 +71,15 @@ def provider():
     from app.services.telephony.mock_provider import MockTelephonyProvider
 
     return MockTelephonyProvider()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits() -> None:
+    """CP09 rate limiting keys live in Redis for a minute; without this the
+    many logins across the suite would trip the per-IP login limit."""
+    try:
+        client = redis_lib.Redis.from_url(os.environ["REDIS_URL"])
+        for key in client.scan_iter("ratelimit:*"):
+            client.delete(key)
+    except redis_lib.RedisError:
+        pass

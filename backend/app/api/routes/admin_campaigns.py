@@ -19,6 +19,7 @@ from app.schemas.campaign import CampaignResponse, CampaignUpdate
 from app.schemas.pagination import Page
 from app.services.admin.auth import AdminPrincipal
 from app.services.admin.campaign_service import get_campaign_detail, list_campaigns
+from app.services.audit_service import record_audit_event
 from app.services.campaign_service import CampaignService
 
 router = APIRouter(prefix="/api/v1/admin/campaigns", tags=["Admin Campaigns"])
@@ -50,11 +51,19 @@ def transition_campaign_status(
     campaign_id: uuid.UUID,
     new_status: CampaignStatus,
     db: Session = Depends(get_db),
-    _principal: AdminPrincipal = Depends(require_role("admin")),
+    principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> CampaignResponse:
     """§5: operational controls (activate/pause/resume/complete) require
     the `admin` role, unlike the read-only monitoring endpoints above."""
     campaign = CampaignService(db).update_campaign(
         campaign_id, CampaignUpdate(status=new_status)
+    )
+    record_audit_event(
+        db,
+        actor=principal.username,
+        action="admin.campaign.status_change",
+        entity_type="campaign",
+        entity_id=campaign_id,
+        metadata={"to_status": new_status.value, "role": principal.role},
     )
     return CampaignResponse.model_validate(campaign)

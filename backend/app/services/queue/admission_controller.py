@@ -57,7 +57,7 @@ class AdmissionController:
 
     def try_admit(self, *, campaign_id: str, provider_name: str) -> AdmissionResult:
         breaker = CircuitBreaker(self.redis, provider_name)
-        if breaker.is_open():
+        if not breaker.allow_request():
             return AdmissionResult(False, "circuit_open")
 
         concurrency_keys = [

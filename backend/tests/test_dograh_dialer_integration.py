@@ -52,7 +52,7 @@ def _with_dograh_engine(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_successful_trigger_sets_connected_state_without_starting_conversation(
+def test_successful_trigger_records_provider_acceptance_but_not_connection(
     db_session, redis_client, provider, monkeypatch
 ):
     _with_dograh_engine(monkeypatch)
@@ -74,11 +74,12 @@ def test_successful_trigger_sets_connected_state_without_starting_conversation(
 
         assert outcome == JobOutcome.ADMITTED_AND_DIALED
         attempt = db_session.query(CallAttempt).filter(CallAttempt.contact_id == contact.id).one()
-        assert attempt.state == CallAttemptState.CONNECTED
+        # CP09: Dograh accepting the request is not a phone connection.
+        assert attempt.state == CallAttemptState.INITIATED
         assert attempt.provider == "dograh"
         assert attempt.provider_call_id == "99"
         db_session.refresh(contact)
-        assert contact.status == ContactStatus.IN_CONVERSATION
+        assert contact.status == ContactStatus.DIALING
     finally:
         get_settings.cache_clear()
 

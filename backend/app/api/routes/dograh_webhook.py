@@ -27,13 +27,11 @@ from app.core import metrics
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.rate_limit import rate_limit
-from app.models.call_attempt import CallAttempt
-from app.models.contact import Contact
 from app.schemas.dograh_webhook import DograhWebhookPayload
-from app.services.analysis.admission import enqueue_call_analysis
 from app.services.call_state import InvalidTransition
 from app.services.telephony.dograh_webhook_service import (
     DograhWebhookError,
+    admit_analysis,
     process_dograh_webhook,
 )
 
@@ -95,20 +93,5 @@ def dograh_call_completed(
         ) from None
 
     if result.needs_analysis:
-        _admit_analysis(db, result.call_attempt_id)
+        admit_analysis(db, result.call_attempt_id)
     return {"call_attempt_id": str(result.call_attempt_id), "outcome": result.outcome}
-
-
-def _admit_analysis(db: Session, attempt_id) -> None:  # type: ignore[no-untyped-def]
-    """Post-commit downstream job. The call is already durably recorded, so
-    a failure here must not fail the ACK; the reconciler re-admits any
-    completed call that has no analysis row."""
-    try:
-        attempt = db.get(CallAttempt, attempt_id)
-        contact = db.get(Contact, attempt.contact_id) if attempt is not None else None
-        if attempt is not None and contact is not None:
-            enqueue_call_analysis(db, attempt, contact)
-            db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("dograh_analysis_admission_failed", extra={"attempt_id": str(attempt_id)})

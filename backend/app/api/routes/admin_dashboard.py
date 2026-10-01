@@ -14,6 +14,7 @@ from app.schemas.admin import AnalyticsResponse, DashboardOverview, SystemHealth
 from app.services.admin.analytics_service import get_analytics
 from app.services.admin.auth import AdminPrincipal
 from app.services.admin.dashboard_service import get_dashboard_overview
+from app.services.admin.metrics_service import collect_metrics
 from app.services.admin.system_service import get_system_health
 
 router = APIRouter(prefix="/api/v1/admin/dashboard", tags=["Admin Dashboard"])
@@ -41,3 +42,13 @@ def system_health(
     db: Session = Depends(get_db), _principal: AdminPrincipal = Depends(require_admin)
 ) -> SystemHealthResponse:
     return get_system_health(db)
+
+
+@router.get("/system/metrics")
+def system_metrics(
+    db: Session = Depends(get_db), _principal: AdminPrincipal = Depends(require_admin)
+) -> dict:
+    """Operational counters plus gauges computed from their real sources
+    (PostgreSQL for call state, Redis streams for queue state). Contains no
+    PII and no secrets."""
+    return collect_metrics(db)

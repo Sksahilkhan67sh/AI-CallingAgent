@@ -42,6 +42,7 @@ from app.models.suppression import Suppression
 from app.repositories.suppression_repository import SuppressionRepository
 from app.schemas.dograh_webhook import DograhWebhookPayload
 from app.services import call_state
+from app.services.analysis.admission import enqueue_call_analysis
 from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.manager import RecoveryManager
 from app.services.telephony import safe_fetch
@@ -300,3 +301,18 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
         ),
         source="dograh_webhook",
     )
+
+
+def admit_analysis(db: Session, attempt_id: uuid.UUID) -> None:
+    """Post-commit downstream job. The call is already durably recorded, so
+    a failure here must not fail the ACK; the reconciler re-admits any
+    completed call that has no analysis row."""
+    try:
+        attempt = db.get(CallAttempt, attempt_id)
+        contact = db.get(Contact, attempt.contact_id) if attempt is not None else None
+        if attempt is not None and contact is not None:
+            enqueue_call_analysis(db, attempt, contact)
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("dograh_analysis_admission_failed", extra={"attempt_id": str(attempt_id)})
