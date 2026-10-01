@@ -37,7 +37,9 @@ TestSessionLocal = sessionmaker(bind=test_engine, autoflush=False, autocommit=Fa
 def db_session() -> Session:
     connection = test_engine.connect()
     transaction = connection.begin()
-    session = TestSessionLocal(bind=connection)
+    # create_savepoint: commit()/rollback() inside the code under test only
+    # touch a SAVEPOINT, so nothing can escape the per-test outer transaction.
+    session = TestSessionLocal(bind=connection, join_transaction_mode="create_savepoint")
 
     yield session
 

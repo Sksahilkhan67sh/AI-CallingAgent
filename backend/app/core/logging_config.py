@@ -13,7 +13,8 @@ from typing import Any
 
 from app.core.config import get_settings
 
-_PHONE = re.compile(r"\+?\d[\d\-\s().]{6,}\d")
+# Lookarounds keep this off UUIDs, hex ids and other word-embedded digit runs.
+_PHONE = re.compile(r"(?<![\w\-+])\+?\d[\d\-\s().]{6,}\d(?![\w\-])")
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime"}
 _SECRET_KEYS = ("secret", "token", "password", "api_key", "authorization")
 
