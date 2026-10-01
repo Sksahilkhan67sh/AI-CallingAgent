@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import metrics
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -160,6 +161,7 @@ class RecoveryManager:
             },
         )
         self.db.flush()
+        metrics.incr(metrics.RETRY_COUNT)  # Checkpoint 09: observability only
 
     def _terminalize(
         self, call_attempt: CallAttempt, contact: Contact, reason: str
