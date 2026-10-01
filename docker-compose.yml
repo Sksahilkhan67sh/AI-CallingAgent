@@ -35,6 +35,13 @@ services:
       - LOG_LEVEL=debug
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://redis:6379/0
+    healthcheck:
+      # Readiness (PostgreSQL + Redis reachable), not just liveness.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     depends_on:
       db:
         condition: service_healthy
@@ -46,11 +53,17 @@ services:
     command: ["python", "-m", "app.worker"]
     env_file:
       - ./backend/.env.example
+    stop_grace_period: 45s  # lets an in-flight job finish, commit and ack
+    healthcheck:
+      disable: true  # worker has no HTTP server; the image HEALTHCHECK targets the API
     environment:
       - LOG_LEVEL=debug
+      - RUN_MIGRATIONS=false
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://redis:6379/0
     depends_on:
+      backend:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
@@ -61,11 +74,17 @@ services:
     command: ["python", "-m", "app.analysis_worker"]
     env_file:
       - ./backend/.env.example
+    stop_grace_period: 45s  # lets an in-flight job finish, commit and ack
+    healthcheck:
+      disable: true  # worker has no HTTP server; the image HEALTHCHECK targets the API
     environment:
       - LOG_LEVEL=debug
+      - RUN_MIGRATIONS=false
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://redis:6379/0
     depends_on:
+      backend:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:

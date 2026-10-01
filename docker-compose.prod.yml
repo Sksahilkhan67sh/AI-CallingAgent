@@ -1,0 +1,34 @@
+# Production override (Checkpoint 09):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Requires Docker Compose >= 2.24 (for `!reset` / `!override`). Secrets come
+# from `backend/.env.production`, which is NOT committed (see .gitignore) --
+# supply it from your secret manager at deploy time. In production prefer
+# managed PostgreSQL/Redis (set PRIMARY_DB_URL / REDIS_URL there).
+services:
+  db:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  backend:
+    env_file: !override
+      - ./backend/.env.production
+    environment: !override
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info
+    restart: unless-stopped
+  worker:
+    env_file: !override
+      - ./backend/.env.production
+    environment: !override
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info
+      - RUN_MIGRATIONS=false
+    restart: unless-stopped
+  analysis-worker:
+    env_file: !override
+      - ./backend/.env.production
+    environment: !override
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info
+      - RUN_MIGRATIONS=false
+    restart: unless-stopped
