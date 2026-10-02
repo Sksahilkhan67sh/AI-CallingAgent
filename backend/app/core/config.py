@@ -15,6 +15,7 @@ secrets manager -- never via committed files.
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -116,12 +117,19 @@ class Settings(BaseSettings):
     # the workflow to be published first. See Dograh's own API Trigger
     # docs -- this is Dograh's distinction, not one we invented.
     dograh_trigger_mode: str = "test"
-    dograh_request_timeout_seconds: float = 15.0
+    # §1.2: bounded, independently-configurable connect vs. read
+    # timeouts -- see app/services/telephony/dograh_client.py.
+    dograh_connect_timeout_seconds: float = 5.0
+    dograh_read_timeout_seconds: float = 15.0
     # Shared secret we tell Dograh's Webhook node to send back (as a
     # Bearer token or an X-API-Key header, either is accepted) --
     # same "env-configured secret, dev-only-insecure default"
     # convention as telephony_webhook_secret.
     dograh_webhook_secret: str = "dev-only-insecure-dograh-webhook-secret-change-me"
+
+    # --- Rate limiting (Checkpoint 09 §8.5) ---
+    login_rate_limit_per_minute: int = 10
+    webhook_rate_limit_per_minute: int = 120
 
     # --- Post-call intelligence (Checkpoint 06) ---
     # "mock" is the only supported value until real credentials exist,
@@ -141,6 +149,49 @@ class Settings(BaseSettings):
     # Truncation preserves the beginning, the ending, and a sample of
     # the middle -- see app/services/analysis/transcript.py.
     analysis_max_transcript_messages: int = 200
+
+    # --- Production config validation (Checkpoint 09 §10) ---
+    # "Do not silently use development defaults in production." Every
+    # value checked here is a dev-only-insecure default that already
+    # exists elsewhere in this file (jwt_signing_key, the admin/operator
+    # passwords, telephony_webhook_secret, dograh_webhook_secret) --
+    # this validator doesn't invent new secrets, it just refuses to
+    # boot with the known-insecure ones once environment="production".
+    @model_validator(mode="after")
+    def _validate_production_config(self) -> "Settings":
+        if self.environment != "production":
+            return self
+
+        problems: list[str] = []
+
+        _DEV_DEFAULTS = {
+            "jwt_signing_key": "dev-only-insecure-key-change-me",
+            "admin_password": "dev-only-insecure-admin-password-change-me",
+            "operator_password": "dev-only-insecure-operator-password-change-me",
+            "telephony_webhook_secret": "dev-only-insecure-webhook-secret-change-me",
+            "dograh_webhook_secret": "dev-only-insecure-dograh-webhook-secret-change-me",
+        }
+        for field_name, insecure_default in _DEV_DEFAULTS.items():
+            if getattr(self, field_name) == insecure_default:
+                problems.append(f"{field_name.upper()} is still set to its dev-only default")
+
+        if self.calling_engine == "dograh":
+            if not self.dograh_api_key:
+                problems.append("DOGRAH_API_KEY is required when CALLING_ENGINE=dograh")
+            if not self.dograh_trigger_uuid:
+                problems.append("DOGRAH_TRIGGER_UUID is required when CALLING_ENGINE=dograh")
+            if self.dograh_trigger_mode != "production":
+                problems.append(
+                    "DOGRAH_TRIGGER_MODE must be 'production' (not 'test') when "
+                    "ENVIRONMENT=production -- see docs/CHECKPOINT-09-NOTES.md §1.1"
+                )
+
+        if problems:
+            raise ValueError(
+                "Refusing to start with ENVIRONMENT=production and insecure/incomplete "
+                "configuration:\n  - " + "\n  - ".join(problems)
+            )
+        return self
 
 
 @lru_cache

@@ -16,7 +16,7 @@ from types import FrameType
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis
 from app.services.admin.system_service import DIALER_HEARTBEAT_KEY
-from app.services.queue.dialer_worker import JobOutcome, process_one_job
+from app.services.queue.dialer_worker import JobOutcome, process_claimed_job, process_one_job
 from app.services.queue.factory import get_admission_controller, get_queue
 from app.services.recovery.dispatch import dispatch_due_recovery_jobs
 from app.services.recovery.factory import get_recovery_scheduler
@@ -86,8 +86,30 @@ def run() -> None:
                     reclaimed = queue.reclaim_stale(
                         consumer_name, get_settings().queue_reclaim_idle_ms
                     )
-                    if reclaimed:
-                        logger.info("reclaimed_stale_jobs", extra={"count": len(reclaimed)})
+                    # Checkpoint 09 §4.3: actually re-drive processing on
+                    # what reclaim_stale returns -- XAUTOCLAIM only
+                    # transfers message ownership, it does not execute
+                    # anything on its own. Each reclaimed job re-enters
+                    # the exact same claim -> load DB state -> validate
+                    # -> execute -> persist -> ack contract as a fresh
+                    # delivery (process_claimed_job re-checks DB
+                    # eligibility before dialing, so a contact already
+                    # handled by a different recovery path is a safe
+                    # no-op here, never a duplicate call).
+                    for message_id, reclaimed_job in reclaimed:
+                        reclaimed_outcome = process_claimed_job(
+                            db,
+                            queue,
+                            admission,
+                            provider,
+                            circuit_breaker,
+                            message_id,
+                            reclaimed_job,
+                        )
+                        db.commit()
+                        logger.info(
+                            "reclaimed_job_processed", extra={"outcome": reclaimed_outcome}
+                        )
 
                 if reclaim_counter % _RECOVERY_DISPATCH_EVERY_N_ITERATIONS == 0:
                     dispatched = dispatch_due_recovery_jobs(recovery_scheduler, queue)
