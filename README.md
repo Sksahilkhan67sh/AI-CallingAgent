@@ -8,6 +8,27 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
+**Checkpoint 09 — Production Hardening.** Hardens the Checkpoint 08
+Dograh integration for production operation rather than adding new
+features: corrects a real state-machine bug (a call was marked
+`CONNECTED` merely because Dograh accepted the trigger request --
+provider acceptance is not the same as a phone connecting, so the
+completion webhook is now the only place this integration learns
+whether a call actually connected), gives Dograh calls their own
+admission/circuit-breaker protection (previously shared with -- and
+invisible alongside -- the native provider's), adds a structured
+provider-error taxonomy with explicit ambiguous-timeout handling so a
+request that may have reached Dograh is never blindly retried, fixes a
+real bug where a crashed dialer worker's claimed-but-unexecuted job
+was never actually reprocessed after reclaim, adds webhook replay
+protection via the existing `ProcessedEvent` model, hardens webhook
+payload validation, adds a `/ready` endpoint, rate limits the public
+login and webhook endpoints, and fails startup fast in production if
+required secrets are still at their dev-only defaults. See
+`docs/CHECKPOINT-09-NOTES.md` for the full verified/unverified
+breakdown -- Dograh E2E against a live instance is explicitly **not
+verified** (none was reachable in this environment).
+
 **Checkpoint 08 — Dograh Integration.** Adds an alternative calling
 engine: `CALLING_ENGINE=dograh` delegates telephony, STT, LLM, and TTS
 entirely to a separately-run [Dograh](https://www.dograh.com/)
