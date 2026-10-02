@@ -20,7 +20,7 @@ DIALER_HEARTBEAT_KEY = "heartbeat:worker"
 ANALYSIS_HEARTBEAT_KEY = "heartbeat:analysis_worker"
 
 
-def _check_postgres(db: Session) -> ComponentHealth:
+def check_postgres(db: Session) -> ComponentHealth:
     try:
         db.execute(text("SELECT 1"))
         return ComponentHealth(name="PostgreSQL", status="ok")
@@ -28,7 +28,7 @@ def _check_postgres(db: Session) -> ComponentHealth:
         return ComponentHealth(name="PostgreSQL", status="degraded", detail=str(exc)[:200])
 
 
-def _check_redis() -> ComponentHealth:
+def check_redis() -> ComponentHealth:
     try:
         get_redis().ping()
         return ComponentHealth(name="Redis", status="ok")
@@ -70,8 +70,8 @@ def _queue_health(name: str, redis_client, stream_key: str, group: str) -> Queue
 def get_system_health(db: Session) -> SystemHealthResponse:
     components = [
         ComponentHealth(name="API", status="ok"),
-        _check_postgres(db),
-        _check_redis(),
+        check_postgres(db),
+        check_redis(),
         _check_worker("Dialer Worker", DIALER_HEARTBEAT_KEY),
         _check_worker("Analysis Worker", ANALYSIS_HEARTBEAT_KEY),
     ]

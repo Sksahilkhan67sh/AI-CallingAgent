@@ -53,6 +53,12 @@ def client(db_session: Session) -> TestClient:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    # Checkpoint 09: every test gets a clean Redis regardless of
+    # whether it also requests the redis_client fixture -- without
+    # this, Redis-backed state (rate limiting, circuit breakers, queue
+    # streams written incidentally through the app) leaks across tests
+    # that only use `client`, not `redis_client` directly.
+    redis_lib.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True).flushdb()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
