@@ -76,6 +76,15 @@ class FakeDograh:
         self.error = error
         self.calls = 0
         self.run_ids: list[int] = []
+        self.runs: list[int] = []  # what Dograh's run listing returns for any attempt
+        self.reconcile_error: Exception | None = None
+        self.reconcile_calls = 0
+
+    def find_runs_for_attempt(self, call_attempt_id: str, since) -> list[int]:
+        self.reconcile_calls += 1
+        if self.reconcile_error is not None:
+            raise self.reconcile_error
+        return list(self.runs)
 
     def trigger_call(self, *, phone_number: str, initial_context: dict) -> DograhTriggerResult:
         self.calls += 1
@@ -548,3 +557,169 @@ def test_shutdown_mid_job_finishes_it_durably_stops_claiming_and_restart_continu
     assert dograh.calls == 2
     assert all(len(_attempts(cid)) == 1 for cid in (c1, c2))
     assert _pending(queue) == 0
+
+
+# -- Phase 1: reconciliation of an ambiguous trigger ---------------------------
+
+AMBIGUOUS = DograhApiError(
+    0, "timed out waiting for response", category=DograhErrorCategory.AMBIGUOUS_REQUEST
+)
+
+
+def _events(attempt_id) -> dict[str, dict]:
+    with _Session() as s:
+        rows = s.execute(select(CallEvent).where(CallEvent.call_attempt_id == attempt_id)).scalars()
+        return {e.event_type: e.payload for e in rows}
+
+
+def _run_one(dograh, redis_client, provider, name):
+    campaign_id, (contact_id,) = _world()
+    queue, admission = _queue(redis_client, name), _admission(redis_client)
+    job = DialJob.new(campaign_id=campaign_id, contact_id=contact_id, attempt_number=1)
+    queue.enqueue(job)
+    message_id, delivered = queue.read_one("w1", 100)
+    outcome = _drive(queue, admission, provider, redis_client, message_id, delivered)
+    return queue, admission, job, contact_id, outcome
+
+
+def _scheduled_for(contact_id: str, seconds_ahead: int) -> int:
+    now = datetime.now(UTC) + timedelta(seconds=seconds_ahead)
+    return len([j for j in get_recovery_scheduler().due_jobs(now) if contact_id in j])
+
+
+def test_ambiguous_trigger_with_one_existing_run_is_adopted_not_redialed(
+    dograh, redis_client, provider
+):
+    dograh.error = AMBIGUOUS
+    adopted_run = next(_RUN_IDS)
+    dograh.runs = [adopted_run]
+
+    queue, admission, job, contact_id, outcome = _run_one(dograh, redis_client, provider, "rc1")
+
+    assert outcome == JobOutcome.RECONCILED
+    assert dograh.calls == 1 and dograh.reconcile_calls == 1 and _pending(queue) == 0
+    (attempt,) = _attempts(contact_id)
+    assert attempt.provider_call_id == str(adopted_run)
+    assert attempt.state == CallAttemptState.INITIATED  # never CONNECTED: the webhook decides
+    assert _events(attempt.id)["DOGRAH_TRIGGER_RECONCILED"] == {"workflow_run_id": adopted_run}
+    assert _scheduled_for(contact_id, 3600) == 0  # no retry: the call already exists
+    with _Session() as s:
+        assert s.get(Contact, contact_id).status == ContactStatus.DIALING
+
+    # Repeated delivery / repeated reconciliation is an idempotent no-op.
+    queue.enqueue(job)
+    message_id, delivered = queue.read_one("w1", 100)
+    assert _drive(queue, admission, provider, redis_client, message_id, delivered) == (
+        JobOutcome.ALREADY_PROCESSED
+    )
+    assert dograh.calls == 1 and dograh.reconcile_calls == 1 and len(_attempts(contact_id)) == 1
+
+
+def test_ambiguous_trigger_with_no_run_found_falls_back_to_backoff(
+    dograh, redis_client, provider
+):
+    dograh.error = AMBIGUOUS
+    dograh.runs = []
+
+    _, _, _, contact_id, outcome = _run_one(dograh, redis_client, provider, "rc2")
+
+    assert outcome == JobOutcome.ADMITTED_AND_DIALED
+    (attempt,) = _attempts(contact_id)
+    assert attempt.state == CallAttemptState.FAILED_TO_CONNECT
+    assert _events(attempt.id)["DOGRAH_TRIGGER_AMBIGUOUS"]["reconcile"] == "no_run_found"
+    # "None found" is not proof of absence: the normal 30s backoff still applies.
+    assert _scheduled_for(contact_id, 5) == 0 and _scheduled_for(contact_id, 45) == 1
+
+
+def test_ambiguous_trigger_with_several_runs_never_picks_one_and_never_retries(
+    dograh, redis_client, provider
+):
+    dograh.error = AMBIGUOUS
+    dograh.runs = [next(_RUN_IDS), next(_RUN_IDS)]
+
+    queue, _, _, contact_id, outcome = _run_one(dograh, redis_client, provider, "rc3")
+
+    assert outcome == JobOutcome.RECONCILE_MULTIPLE
+    (attempt,) = _attempts(contact_id)
+    assert attempt.provider_call_id is None  # nothing silently chosen
+    assert attempt.state == CallAttemptState.INITIATED  # webhooks resolve it
+    assert _scheduled_for(contact_id, 3600) == 0  # a third call would only make it worse
+    assert "DOGRAH_RECONCILE_MULTIPLE" in _events(attempt.id)
+    with _Session() as s:
+        audit = s.execute(
+            text("SELECT count(*) FROM audit_log WHERE entity_id = :i AND action = :a"),
+            {"i": attempt.id, "a": "dograh.reconcile_multiple_candidates"},
+        ).scalar_one()
+    assert audit == 1 and dograh.calls == 1 and _pending(queue) == 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DograhApiError(503, "down", category=DograhErrorCategory.PROVIDER_UNAVAILABLE),
+        DograhApiError(0, "timed out", category=DograhErrorCategory.AMBIGUOUS_REQUEST),
+        DograhApiError(0, "refused", category=DograhErrorCategory.CONNECTION_ERROR),
+    ],
+    ids=["provider_unavailable", "reconcile_timeout", "connection_error"],
+)
+def test_reconciliation_unavailable_falls_back_to_backoff_without_retrying_inline(
+    error, dograh, redis_client, provider
+):
+    dograh.error = AMBIGUOUS
+    dograh.reconcile_error = error
+
+    _, _, _, contact_id, outcome = _run_one(dograh, redis_client, provider, "rc4")
+
+    assert outcome == JobOutcome.ADMITTED_AND_DIALED
+    assert dograh.reconcile_calls == 1  # one bounded attempt, no inline retry loop
+    (attempt,) = _attempts(contact_id)
+    assert _events(attempt.id)["DOGRAH_TRIGGER_AMBIGUOUS"]["reconcile"] == "unavailable"
+    assert _scheduled_for(contact_id, 5) == 0 and _scheduled_for(contact_id, 45) == 1
+
+
+def test_non_ambiguous_failure_does_not_reconcile(dograh, redis_client, provider):
+    dograh.error = DograhApiError(400, "bad", category=DograhErrorCategory.VALIDATION_ERROR)
+
+    _run_one(dograh, redis_client, provider, "rc5")
+
+    assert dograh.reconcile_calls == 0  # a definite rejection created no run
+
+
+def test_orphaned_claim_adopts_the_existing_run_instead_of_retrying(
+    dograh, redis_client, provider, monkeypatch
+):
+    """The lost-commit scenario, now with a verifiable answer: the call that was
+    placed is found and adopted, so not even a backoff retry is scheduled."""
+    campaign_id, (contact_id,) = _world()
+    queue, admission = _queue(redis_client, "rc6"), _admission(redis_client)
+    queue.enqueue(DialJob.new(campaign_id=campaign_id, contact_id=contact_id, attempt_number=1))
+    message_id, job = queue.read_one("w1", 100)
+
+    with _Session() as db:
+        real_commit, n = db.commit, {"c": 0}
+
+        def flaky_commit():
+            n["c"] += 1
+            if n["c"] == 2:
+                raise _transient_db_error()
+            real_commit()
+
+        monkeypatch.setattr(db, "commit", flaky_commit)
+        with pytest.raises(OperationalError):
+            process_claimed_job(
+                db, queue, admission, provider, CircuitBreaker(redis_client, "dograh"),
+                message_id, job,
+            )
+    with _Session() as s:
+        s.execute(text("UPDATE call_attempt SET started_at = now() - interval '1 hour'"))
+        s.commit()
+
+    placed_run = next(_RUN_IDS)
+    dograh.runs = [placed_run]
+    (reclaimed,) = queue.reclaim_stale("w2", idle_ms=0)
+    assert _drive(queue, admission, provider, redis_client, *reclaimed) == JobOutcome.RECONCILED
+
+    assert dograh.calls == 1 and _pending(queue) == 0
+    (attempt,) = _attempts(contact_id)
+    assert attempt.provider_call_id == str(placed_run)
+    assert _scheduled_for(contact_id, 3600) == 0

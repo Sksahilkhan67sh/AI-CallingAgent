@@ -30,6 +30,7 @@ from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
+from app.services.audit_service import record_audit_event
 from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.job import DialJob
@@ -61,6 +62,11 @@ class JobOutcome:
     # An attempt claim younger than the Dograh request timeouts may still be
     # in flight on another worker. Left UNACKED so a later reclaim re-checks.
     IN_FLIGHT = "in_flight"
+    # Reconciliation (Dograh run listing) found the run an ambiguous trigger
+    # had already created: it is adopted, no retry, the webhook drives it.
+    RECONCILED = "reconciled_existing_run"
+    # More than one run exists for one attempt: never pick one, never retry.
+    RECONCILE_MULTIPLE = "reconcile_multiple_candidates"
     NO_JOB = "no_job"
 
 
@@ -209,8 +215,8 @@ def _dial(
     contact.status = ContactStatus.DIALING
     db.flush()
 
-    _place_call(db, provider, circuit_breaker, contact, attempt, job)
-    return JobOutcome.ADMITTED_AND_DIALED
+    outcome = _place_call(db, provider, circuit_breaker, contact, attempt, job)
+    return outcome or JobOutcome.ADMITTED_AND_DIALED
 
 
 def _resolve_unresolved_dograh_claim(
@@ -239,35 +245,116 @@ def _resolve_unresolved_dograh_claim(
         "dograh_orphaned_claim_ambiguous",
         extra={"attempt_id": str(existing.id), "contact_id": str(contact.id)},
     )
-    _record_ambiguous_dograh_trigger(
-        db, existing, contact, status_code=None, category="orphaned_claim"
+    resolved, reconcile_note = _reconcile_with_dograh(db, existing)
+    if resolved is not None:
+        return resolved
+    _record_dograh_trigger_failure(
+        db,
+        existing,
+        contact,
+        event_type="DOGRAH_TRIGGER_AMBIGUOUS",
+        status_code=None,
+        category="orphaned_claim",
+        reconcile=reconcile_note,
     )
     return JobOutcome.AMBIGUOUS_RECOVERY
 
 
-def _record_ambiguous_dograh_trigger(
+def _record_dograh_trigger_failure(
     db: Session,
     attempt: CallAttempt,
     contact: Contact,
     *,
+    event_type: str,
     status_code: int | None,
     category: str,
+    reconcile: str | None = None,
 ) -> None:
+    """Terminal never-connected outcome for a trigger that did not yield a run;
+    the ONLY follow-up is RecoveryManager's decision (backoff, bounds,
+    suppression/eligibility re-checks)."""
     attempt.provider = "dograh"
     attempt.state = CallAttemptState.FAILED_TO_CONNECT
     attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
     attempt.ended_at = datetime.now(UTC)
-    db.add(
-        CallEvent(
-            call_attempt_id=attempt.id,
-            event_type="DOGRAH_TRIGGER_AMBIGUOUS",
-            payload={"status_code": status_code, "category": category},
-        )
-    )
+    payload: dict = {"status_code": status_code, "category": category}
+    if reconcile is not None:
+        payload["reconcile"] = reconcile
+    db.add(CallEvent(call_attempt_id=attempt.id, event_type=event_type, payload=payload))
     db.flush()
     _handle_never_connected_failure(
         db, attempt, contact, NeverConnectedFailureReason.PROVIDER_ERROR
     )
+
+
+def _reconcile_with_dograh(db: Session, attempt: CallAttempt) -> tuple[str | None, str]:
+    """Ask Dograh whether an ambiguous trigger already created a run for this
+    attempt (documented run listing; see DograhClient.find_runs_for_attempt).
+
+    Returns (outcome, note). outcome is None when nothing was resolved and the
+    caller must fall back to the normal ambiguous path -- note says why
+    ("no_run_found" / "unavailable"). "no_run_found" is NOT proof that no call
+    exists (a timed-out request can still land later), so it never relaxes the
+    RecoveryManager backoff.
+    """
+    from app.services.telephony.dograh_client import DograhApiError, DograhConfigurationError
+    from app.services.telephony.factory import get_dograh_client
+
+    try:
+        run_ids = get_dograh_client().find_runs_for_attempt(str(attempt.id), attempt.started_at)
+    except (DograhApiError, DograhConfigurationError) as exc:
+        logger.warning(
+            "dograh_reconcile_unavailable",
+            extra={"attempt_id": str(attempt.id), "error_type": type(exc).__name__},
+        )
+        return None, "unavailable"
+
+    if not run_ids:
+        return None, "no_run_found"
+
+    if len(run_ids) > 1:
+        # Never silently choose. The duplicate already exists, so retrying
+        # would only add a third call; the webhooks (keyed by call_attempt_id)
+        # will resolve the attempt, and an operator is told.
+        db.add(
+            CallEvent(
+                call_attempt_id=attempt.id,
+                event_type="DOGRAH_RECONCILE_MULTIPLE",
+                payload={"workflow_run_ids": run_ids},
+            )
+        )
+        record_audit_event(
+            db,
+            actor="dialer-worker",
+            action="dograh.reconcile_multiple_candidates",
+            entity_type="call_attempt",
+            entity_id=attempt.id,
+            metadata={"workflow_run_ids": run_ids},
+        )
+        db.flush()
+        logger.error(
+            "dograh_reconcile_multiple_candidates",
+            extra={"attempt_id": str(attempt.id), "count": len(run_ids)},
+        )
+        return JobOutcome.RECONCILE_MULTIPLE, "multiple"
+
+    # Exactly one: adopt it. State stays INITIATED / contact stays DIALING --
+    # the completion webhook decides what actually happened.
+    attempt.provider = "dograh"
+    attempt.provider_call_id = str(run_ids[0])
+    db.add(
+        CallEvent(
+            call_attempt_id=attempt.id,
+            event_type="DOGRAH_TRIGGER_RECONCILED",
+            payload={"workflow_run_id": run_ids[0]},
+        )
+    )
+    db.flush()
+    logger.info(
+        "dograh_trigger_reconciled",
+        extra={"attempt_id": str(attempt.id), "workflow_run_id": run_ids[0]},
+    )
+    return JobOutcome.RECONCILED, "adopted"
 
 
 def _place_call(
@@ -277,7 +364,7 @@ def _place_call(
     contact: Contact,
     attempt: CallAttempt,
     job: DialJob,
-) -> None:
+) -> str | None:
     from app.core.config import get_settings
 
     if get_settings().calling_engine == "dograh":
@@ -287,8 +374,7 @@ def _place_call(
         # drive, so _start_conversation_safely is deliberately never
         # called on this path. The call's outcome arrives later, once,
         # via app/api/routes/dograh_webhook.py.
-        _place_call_via_dograh(db, contact, attempt, job)
-        return
+        return _place_call_via_dograh(db, contact, attempt, job)
 
     result = provider.create_outbound_call(
         to_number=contact.normalized_phone_number, idempotency_key=job.idempotency_key
@@ -325,11 +411,12 @@ def _place_call(
             _handle_never_connected_failure(db, attempt, contact, result.failure_reason)
 
     db.flush()
+    return None
 
 
 def _place_call_via_dograh(
     db: Session, contact: Contact, attempt: CallAttempt, job: DialJob
-) -> None:
+) -> str | None:
     """Checkpoint 08/09: one HTTP call replaces both `create_outbound_call`
     and the conversation-start step above -- Dograh runs the entire
     call (dial, STT, LLM, TTS) autonomously once triggered. Our
@@ -388,9 +475,8 @@ def _place_call_via_dograh(
         attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
         attempt.ended_at = datetime.now(UTC)
         db.flush()
-        return
+        return None
     except DograhApiError as exc:
-        dograh_breaker.record_failure()
         is_ambiguous = exc.category in AMBIGUOUS_CATEGORIES
         logger.warning(
             "dograh_trigger_failed",
@@ -401,34 +487,34 @@ def _place_call_via_dograh(
                 "ambiguous": is_ambiguous,
             },
         )
-        attempt.provider = "dograh"
-        attempt.state = CallAttemptState.FAILED_TO_CONNECT
-        attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
-        attempt.ended_at = datetime.now(UTC)
-        db.add(
-            CallEvent(
-                call_attempt_id=attempt.id,
-                event_type="DOGRAH_TRIGGER_AMBIGUOUS" if is_ambiguous else "DOGRAH_TRIGGER_FAILED",
-                payload={"status_code": exc.status_code, "category": exc.category.value},
-            )
-        )
-        db.flush()
         # Checkpoint 09 §1.3: an ambiguous outcome (the request may have
-        # reached Dograh before we lost the response) is *never*
-        # retried immediately -- it goes through the exact same
-        # RecoveryManager path as any other never-connected failure,
-        # which applies the normal 30s/10min backoff before a retry is
-        # even scheduled. No Dograh API capability for querying "was a
-        # run already created for this trigger" was found/verified in
-        # its published docs (Checkpoint 08's own research), so this
-        # backoff window -- not an active reconciliation call -- is
-        # what stands between an ambiguous timeout and a possible
-        # duplicate call. Documented as a known limitation, not
-        # silently assumed safe -- see docs/CHECKPOINT-09-NOTES.md.
-        _handle_never_connected_failure(
-            db, attempt, contact, attempt.connection_failure_reason
+        # reached Dograh before the response was lost) is never retried
+        # immediately. First ask Dograh's documented run listing whether a run
+        # already exists for this attempt: exactly one => adopt it (no second
+        # call); several => never choose; none/unavailable => fall through to
+        # the normal never-connected path, i.e. RecoveryManager's 30s/10min
+        # backoff and re-checks. "None found" is not proof of absence, so it
+        # never shortens that backoff.
+        reconcile_note: str | None = None
+        if is_ambiguous:
+            resolved, reconcile_note = _reconcile_with_dograh(db, attempt)
+            if resolved is not None:
+                if resolved == JobOutcome.RECONCILED:
+                    dograh_breaker.record_success()  # Dograh did accept the trigger
+                else:
+                    dograh_breaker.record_failure()
+                return resolved
+        dograh_breaker.record_failure()
+        _record_dograh_trigger_failure(
+            db,
+            attempt,
+            contact,
+            event_type="DOGRAH_TRIGGER_AMBIGUOUS" if is_ambiguous else "DOGRAH_TRIGGER_FAILED",
+            status_code=exc.status_code,
+            category=exc.category.value,
+            reconcile=reconcile_note,
         )
-        return
+        return None
 
     dograh_breaker.record_success()
     attempt.provider = "dograh"
@@ -444,6 +530,7 @@ def _place_call_via_dograh(
     logger.info(
         "dograh_call_triggered", extra={**log_extra, "workflow_run_id": result.workflow_run_id}
     )
+    return None
 
 
 def _start_conversation_safely(
