@@ -49,6 +49,10 @@ from app.services.audit_service import record_audit_event
 from app.services.processed_event_service import claim_event
 from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.manager import RecoveryManager
+from app.services.telephony.dograh_reconciliation import (
+    is_unresolved_ambiguous_trigger,
+    reopen_for_adoption,
+)
 
 logger = logging.getLogger("dograh_webhook")
 
@@ -231,7 +235,12 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     # webhook delivery with a *different* event_id must never reopen an
     # already-terminal attempt (Checkpoint 09 §2: no terminal -> active
     # transitions).
-    if attempt.state in (
+    # The one exception is an unresolved ambiguous trigger: its
+    # FAILED_TO_CONNECT is provisional (no run id was ever recorded), and a
+    # completion webhook is proof the run exists -- dropping it would lose the
+    # real call's outcome.
+    unresolved_ambiguous = is_unresolved_ambiguous_trigger(db, attempt)
+    if not unresolved_ambiguous and attempt.state in (
         CallAttemptState.ENDED_NORMALLY,
         CallAttemptState.DROPPED_MID_CALL,
         CallAttemptState.FAILED_TO_CONNECT,
@@ -254,6 +263,21 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     # idempotent no-ops that have mutated nothing.
     if not claim_event(db, event_id, _EVENT_TYPE):
         return DograhWebhookResult(call_attempt_id=attempt.id, outcome="already_processed")
+
+    if unresolved_ambiguous:
+        reopen_for_adoption(attempt, contact)
+        if payload.workflow_run_id is not None:
+            attempt.provider = "dograh"
+            attempt.provider_call_id = str(payload.workflow_run_id)
+        record_audit_event(
+            db,
+            actor=_ACTOR,
+            action="dograh.reconciliation_run_adopted",
+            entity_type="call_attempt",
+            entity_id=attempt.id,
+            metadata={"stage": "webhook", "workflow_run_id": payload.workflow_run_id},
+        )
+        db.flush()
 
     if state == CallAttemptState.FAILED_TO_CONNECT:
         assert never_connected_reason is not None

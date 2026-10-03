@@ -625,3 +625,146 @@ def test_fi_redelivered_retry_job_after_a_completed_retry_is_a_noop(fake, redis_
 
     assert outcome == JobOutcome.ALREADY_PROCESSED
     assert fake.calls == 2 and fake.reconcile_calls == lookups
+
+
+# -- adoption -> completion webhook -> terminal state -> analysis ------------------------
+
+WEBHOOK_URL = "/api/v1/webhooks/dograh/call-completed"
+
+
+def _auth():
+    return {"Authorization": f"Bearer {get_settings().dograh_webhook_secret}"}
+
+
+def _post_webhook(web, attempt, run_id, status, *, headers=None):
+    return web.post(
+        WEBHOOK_URL,
+        json={"call_attempt_id": str(attempt.id), "workflow_run_id": run_id, "call_status": status},
+        headers=_auth() if headers is None else headers,
+    )
+
+
+@pytest.fixture
+def real_client():
+    """The real app with real get_db commits (no dependency override), so the
+    worker's separate sessions see exactly what the webhook committed."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        yield c
+
+
+def _sessions_and_analysis(attempt_id) -> tuple[int, int]:
+    from app.models.conversation import ConversationSession
+
+    with _Session() as s:
+        sessions = len(
+            s.execute(
+                select(ConversationSession.id).where(
+                    ConversationSession.call_attempt_id == attempt_id
+                )
+            ).all()
+        )
+    return sessions, _audit_count(attempt_id, "analysis.queued")
+
+
+def test_adopted_attempt_completes_via_webhook_exactly_once_and_is_analysed(
+    fake, redis_client, provider, real_client
+):
+    """FAILED_TO_CONNECT -> (one run found) -> INITIATED/DIALING -> completion
+    webhook -> terminal -> post-call analysis."""
+    sc = _first_attempt_ambiguous(fake, redis_client, provider, "w3")
+    run = next(_RUN_IDS)
+    fake.runs = [run]
+    assert _process(sc, redis_client, provider, _due_retry(sc)) == JobOutcome.RECONCILED
+    (attempt,) = _attempts(sc.contact_id)
+    assert attempt.state == CallAttemptState.INITIATED  # reopened, never CONNECTED
+
+    # Webhook validation is NOT bypassed by adoption.
+    unauthenticated = _post_webhook(real_client, attempt, run, "user_hangup", headers={})
+    assert unauthenticated.status_code in (401, 403)
+    assert _attempts(sc.contact_id)[0].state == CallAttemptState.INITIATED
+
+    completed = _post_webhook(real_client, attempt, run, "user_hangup")
+    assert completed.json()["outcome"] == "ended_normally"
+    done = _attempts(sc.contact_id)[0]
+    assert done.state == CallAttemptState.ENDED_NORMALLY  # terminal, and not CONNECTED
+    assert _sessions_and_analysis(attempt.id) == (1, 1)
+
+    # Replay: still exactly one session and one analysis job, and no extra dial.
+    assert _post_webhook(real_client, attempt, run, "user_hangup").json()["outcome"] == (
+        "already_processed"
+    )
+    assert _sessions_and_analysis(attempt.id) == (1, 1)
+    assert fake.calls == 1 and len(_attempts(sc.contact_id)) == 1
+
+
+def test_completion_webhook_arriving_before_the_second_lookup_is_not_lost(
+    fake, redis_client, provider, real_client
+):
+    """The webhook beats the gate: the attempt is still FAILED_TO_CONNECT with
+    no run id. It used to be dropped as already_processed (and a later
+    adoption would then wait forever for a webhook that had already come)."""
+    sc = _first_attempt_ambiguous(fake, redis_client, provider, "w1")
+    (attempt,) = _attempts(sc.contact_id)
+    assert attempt.state == CallAttemptState.FAILED_TO_CONNECT and attempt.provider_call_id is None
+    run = next(_RUN_IDS)
+
+    completed = _post_webhook(real_client, attempt, run, "user_hangup")
+    assert completed.json()["outcome"] == "ended_normally"
+
+    done = _attempts(sc.contact_id)[0]
+    assert done.state == CallAttemptState.ENDED_NORMALLY
+    assert done.provider_call_id == str(run)  # the run is now known
+    assert _sessions_and_analysis(attempt.id) == (1, 1)
+
+    # The already-scheduled retry is now stale: it must not dial.
+    sc.queue.enqueue(
+        DialJob.new(campaign_id=sc.campaign_id, contact_id=sc.contact_id, attempt_number=2)
+    )
+    outcome = _process(sc, redis_client, provider, sc.queue.read_one("w3", 100))
+    assert outcome != JobOutcome.ADMITTED_AND_DIALED
+    assert fake.calls == 1 and len(_attempts(sc.contact_id)) == 1
+
+
+def test_never_connected_webhook_for_an_ambiguous_attempt_still_retries_once(
+    fake, redis_client, provider, real_client
+):
+    sc = _first_attempt_ambiguous(fake, redis_client, provider, "w2")
+    (attempt,) = _attempts(sc.contact_id)
+    run = next(_RUN_IDS)
+
+    unanswered = _post_webhook(real_client, attempt, run, "no_answer")
+    assert unanswered.json()["outcome"] == "never_connected"
+
+    first = _attempts(sc.contact_id)[0]
+    assert first.state == CallAttemptState.FAILED_TO_CONNECT and first.provider_call_id == str(run)
+    assert _sessions_and_analysis(attempt.id) == (0, 0)  # never connected
+
+    sc.queue.enqueue(
+        DialJob.new(campaign_id=sc.campaign_id, contact_id=sc.contact_id, attempt_number=2)
+    )
+    assert _process(sc, redis_client, provider, sc.queue.read_one("w3", 100)) == (
+        JobOutcome.ADMITTED_AND_DIALED
+    )
+    assert fake.calls == 2 and [a.attempt_number for a in _attempts(sc.contact_id)] == [1, 2]
+
+
+def test_a_definite_failure_stays_final_a_late_webhook_does_not_reopen_it(
+    fake, redis_client, provider, real_client
+):
+    """Only an UNRESOLVED AMBIGUOUS trigger is provisional. A definite
+    provider rejection is final, as before."""
+    campaign_id, (contact_id,) = _world()
+    queue, admission = _queue(redis_client, "w4"), _admission(redis_client)
+    fake.error = DograhApiError(400, "bad", category=DograhErrorCategory.VALIDATION_ERROR)
+    queue.enqueue(DialJob.new(campaign_id=campaign_id, contact_id=contact_id, attempt_number=1))
+    _drive(queue, admission, provider, redis_client, *queue.read_one("w1", 100))
+    (attempt,) = _attempts(contact_id)
+
+    response = _post_webhook(real_client, attempt, next(_RUN_IDS), "user_hangup")
+
+    assert response.json()["outcome"] == "already_processed"
+    assert _attempts(contact_id)[0].state == CallAttemptState.FAILED_TO_CONNECT

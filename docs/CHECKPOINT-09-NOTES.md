@@ -640,6 +640,16 @@ Safety properties, each with a test:
   to one. The gate adds a short row lock on the previous attempt, taken only
   after the HTTP lookup, so that concurrent workers adopt once rather than N times.
   2 and 8 workers on one retry produce exactly one trigger (or one adoption).
+- **The completion webhook is never lost.** An unresolved ambiguous attempt is
+  `FAILED_TO_CONNECT` with no run id, and the webhook used to drop terminal
+  attempts *before* claiming the event. If the run's completion webhook beat
+  the second lookup it was silently discarded, and a later adoption would then
+  reopen an attempt waiting for a webhook that had already come. The webhook now
+  treats an unresolved ambiguous attempt as provisional: it adopts the run id,
+  reopens the attempt and processes normally (one `ConversationSession`, one
+  analysis job; replays are no-ops). A definite failure stays final. Detection
+  and reopen are one shared helper (`dograh_reconciliation.py`) used by both
+  the gate and the webhook.
 - **Idempotent:** once a run is adopted, a redelivered retry sees the previous
   attempt active and stops; no new lookup, trigger or audit.
 - **Deliberate state exception:** adopting reopens the previous attempt

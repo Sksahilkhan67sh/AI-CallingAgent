@@ -39,6 +39,11 @@ from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.manager import RecoveryManager
 from app.services.telephony.base import ProviderOutcome, TelephonyProvider
 from app.services.telephony.circuit_breaker import CircuitBreaker
+from app.services.telephony.dograh_reconciliation import (
+    AMBIGUOUS_TRIGGER_EVENT,
+    is_unresolved_ambiguous_trigger,
+    reopen_for_adoption,
+)
 
 logger = logging.getLogger("dialer_worker")
 
@@ -268,7 +273,7 @@ def _resolve_unresolved_dograh_claim(
         db,
         existing,
         contact,
-        event_type="DOGRAH_TRIGGER_AMBIGUOUS",
+        event_type=AMBIGUOUS_TRIGGER_EVENT,
         status_code=None,
         category="orphaned_claim",
         reconcile=reconcile_note,
@@ -446,15 +451,7 @@ def _second_reconciliation_gate(
         logger.info("reconciliation_retry_blocked", extra={**ids, "reason": "previous_active"})
         return JobOutcome.ALREADY_PROCESSED
 
-    ambiguous = db.execute(
-        select(CallEvent.id)
-        .where(
-            CallEvent.call_attempt_id == previous.id,
-            CallEvent.event_type == "DOGRAH_TRIGGER_AMBIGUOUS",
-        )
-        .limit(1)
-    ).first()
-    if previous.provider_call_id is not None or ambiguous is None:
+    if previous.provider_call_id is not None or not is_unresolved_ambiguous_trigger(db, previous):
         return None  # a definite outcome: nothing to reconcile
 
     run_ids, failure = _lookup_dograh_runs(db, previous, stage="second", ids=ids)
@@ -483,10 +480,7 @@ def _second_reconciliation_gate(
     if run_ids:
         # Reopen narrowly: the webhook refuses terminal attempts, so without
         # this the real call's outcome would be dropped as already_processed.
-        previous.state = CallAttemptState.INITIATED
-        previous.ended_at = None
-        previous.connection_failure_reason = None
-        contact.status = ContactStatus.DIALING
+        reopen_for_adoption(previous, contact)
         return _resolve_found_runs(db, previous, run_ids, stage="second", ids=ids)
 
     logger.info("reconciliation_no_run", extra={**ids, "stage": "second"})
@@ -654,7 +648,7 @@ def _place_call_via_dograh(
             db,
             attempt,
             contact,
-            event_type="DOGRAH_TRIGGER_AMBIGUOUS" if is_ambiguous else "DOGRAH_TRIGGER_FAILED",
+            event_type=AMBIGUOUS_TRIGGER_EVENT if is_ambiguous else "DOGRAH_TRIGGER_FAILED",
             status_code=exc.status_code,
             category=exc.category.value,
             reconcile=reconcile_note,
