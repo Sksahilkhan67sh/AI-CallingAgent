@@ -22,6 +22,7 @@ from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.contact_repository import ContactRepository
 from app.schemas.webhook import TelephonyCallStatusWebhook
 from app.services.audit_service import record_audit_event
+from app.services.processed_event_service import claim_event
 
 _ACTOR = "telephony-webhook"
 
@@ -33,10 +34,9 @@ class WebhookService:
         self.contacts = ContactRepository(db)
 
     def process_call_status(self, payload: TelephonyCallStatusWebhook) -> dict:
-        existing_event = self.db.execute(
-            select(ProcessedEvent).where(ProcessedEvent.event_id == payload.event_id)
-        ).scalar_one_or_none()
-        if existing_event is not None:
+        if self.db.execute(
+            select(ProcessedEvent.id).where(ProcessedEvent.event_id == payload.event_id)
+        ).first() is not None:
             return {"status": "already_processed"}  # idempotent no-op
 
         attempt = self.attempts.get_by_provider_call_id(payload.provider_call_id)
@@ -70,8 +70,8 @@ class WebhookService:
         else:
             raise ConflictError(f"Unknown call status '{payload.status}'")
 
-        self.db.add(ProcessedEvent(event_id=payload.event_id, event_type="telephony.call_status"))
-        self.db.flush()
+        if not claim_event(self.db, payload.event_id, "telephony.call_status"):
+            return {"status": "already_processed"}
 
         record_audit_event(
             self.db,

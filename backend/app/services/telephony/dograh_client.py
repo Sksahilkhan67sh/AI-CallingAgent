@@ -10,7 +10,9 @@ against (Dograh's own `API Trigger` node reference).
 """
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -43,6 +45,10 @@ class DograhErrorCategory(str, enum.Enum):
 AMBIGUOUS_CATEGORIES = frozenset(
     {DograhErrorCategory.AMBIGUOUS_REQUEST, DograhErrorCategory.TIMEOUT}
 )
+
+_RECONCILE_PAGE_SIZE = 100  # Dograh's documented maximum
+_RECONCILE_MAX_PAGES = 5
+_RECONCILE_WINDOW_PADDING = timedelta(seconds=60)  # clock skew between us and Dograh
 
 
 class DograhApiError(Exception):
@@ -126,20 +132,12 @@ class DograhClient:
             return f"/api/v1/public/agent/{self.trigger_uuid}"
         return f"/api/v1/public/agent/test/{self.trigger_uuid}"
 
-    def trigger_call(
-        self, *, phone_number: str, initial_context: dict[str, Any]
-    ) -> DograhTriggerResult:
-        url = f"{self.base_url}{self._trigger_path()}"
+    def _send(self, send: Callable[..., httpx.Response], url: str, **kwargs: Any) -> httpx.Response:
+        """One place that turns httpx failures and HTTP error statuses into
+        the DograhApiError taxonomy, shared by the trigger and the
+        reconciliation lookup."""
         try:
-            response = httpx.post(
-                url,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-API-Key": self.api_key,
-                },
-                json={"phone_number": phone_number, "initial_context": initial_context},
-                timeout=self.timeout,
-            )
+            response = send(url, timeout=self.timeout, **kwargs)
         except httpx.ConnectTimeout as exc:
             # Never even established a connection -- the request
             # definitely never reached Dograh. Not ambiguous.
@@ -181,10 +179,77 @@ class DograhClient:
                 response.status_code, detail, category=_classify_status_code(response.status_code)
             )
 
+        return response
+
+    def trigger_call(
+        self, *, phone_number: str, initial_context: dict[str, Any]
+    ) -> DograhTriggerResult:
+        response = self._send(
+            httpx.post,
+            f"{self.base_url}{self._trigger_path()}",
+            headers={"Content-Type": "application/json", "X-API-Key": self.api_key},
+            json={"phone_number": phone_number, "initial_context": initial_context},
+        )
         body = response.json()
         return DograhTriggerResult(
             workflow_run_id=body["workflow_run_id"],
             workflow_run_name=body.get("workflow_run_name", ""),
+        )
+
+    def find_runs_for_attempt(self, call_attempt_id: str, since: datetime) -> list[int]:
+        """Reconciliation for an ambiguous trigger: which Dograh runs, if any,
+        were created for this CallAttempt?
+
+        Uses Dograh's documented org-wide run listing
+        (GET /api/v1/organizations/usage/runs: `start_date`/`end_date` bound
+        `created_at`, `limit` <= 100, each run carries its `initial_context`).
+        Dograh offers no server-side filter on an arbitrary initial_context
+        key, so matching on the `call_attempt_id` we already round-trip is done
+        here, over a bounded time window. Verified against Dograh's published
+        OpenAPI only -- NOT against a live instance.
+
+        Raises DograhApiError when the answer cannot be trusted (provider
+        error, malformed body, or a window larger than the page bound): "no
+        match" is only ever returned when the whole window was actually read.
+        """
+        url = f"{self.base_url}/api/v1/organizations/usage/runs"
+        window_start = (since - _RECONCILE_WINDOW_PADDING).astimezone(UTC).isoformat()
+        window_end = datetime.now(UTC).isoformat()
+        matches: set[int] = set()
+
+        for page in range(1, _RECONCILE_MAX_PAGES + 1):
+            response = self._send(
+                httpx.get,
+                url,
+                headers={"X-API-Key": self.api_key},
+                params={
+                    "start_date": window_start,
+                    "end_date": window_end,
+                    "page": page,
+                    "limit": _RECONCILE_PAGE_SIZE,
+                },
+            )
+            try:
+                body = response.json()
+                runs = body["runs"]
+                total_pages = int(body["total_pages"])
+                for run in runs:
+                    context = run.get("initial_context") or {}
+                    if context.get("call_attempt_id") == call_attempt_id:
+                        matches.add(int(run["id"]))
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                raise DograhApiError(
+                    response.status_code,
+                    "unexpected run-list response shape",
+                    category=DograhErrorCategory.UNKNOWN_PROVIDER_ERROR,
+                ) from exc
+            if page >= total_pages:
+                return sorted(matches)
+
+        raise DograhApiError(
+            0,
+            "reconciliation window exceeds the page bound; result would be incomplete",
+            category=DograhErrorCategory.UNKNOWN_PROVIDER_ERROR,
         )
 
 
