@@ -106,7 +106,8 @@ def test_concurrent_duplicate_completion_is_processed_exactly_once(n, redis_clie
         attempt = s.get(CallAttempt, attempt_id)
         assert attempt.state == CallAttemptState.ENDED_NORMALLY
         assert _count(s, ProcessedEvent, ProcessedEvent.event_id == f"dograh:{run_id}") == 1
-        assert _count(s, ConversationSession, ConversationSession.call_attempt_id == attempt.id) == 1
+        sessions = _count(s, ConversationSession, ConversationSession.call_attempt_id == attempt.id)
+        assert sessions == 1
         for action in ("call_attempt.ended_normally_via_dograh_webhook", "analysis.queued"):
             assert (
                 _count(s, AuditLog, AuditLog.entity_id == attempt.id, AuditLog.action == action)

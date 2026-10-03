@@ -54,6 +54,13 @@ class JobOutcome:
     NOT_ADMITTED = "not_admitted"  # left unacked -- backpressure
     NOT_ELIGIBLE = "not_eligible"  # acked -- correctly skipped
     ALREADY_PROCESSED = "already_processed"  # acked -- duplicate delivery, safely ignored
+    # Dograh has no idempotency key, so a claimed-but-never-resolved attempt is
+    # never re-triggered: it is routed through RecoveryManager as an ambiguous
+    # trigger (acked -- the recovery job is now the durable record).
+    AMBIGUOUS_RECOVERY = "ambiguous_recovery"
+    # An attempt claim younger than the Dograh request timeouts may still be
+    # in flight on another worker. Left UNACKED so a later reclaim re-checks.
+    IN_FLIGHT = "in_flight"
     NO_JOB = "no_job"
 
 
@@ -123,11 +130,22 @@ def process_claimed_job(
         )
         return JobOutcome.NOT_ADMITTED  # left unacked on purpose
 
+    # Ack contract (Step 5): the message is acked only AFTER the outcome is
+    # durably committed. If anything fails before that (e.g. a transient
+    # PostgreSQL error) nothing is acked, the transaction is rolled back, and
+    # the job stays pending so a reclaim re-drives it -- a lost commit must
+    # never become a lost job, or a placed call with no durable record.
     try:
-        return _dial(db, provider, circuit_breaker, job)
+        outcome = _dial(db, provider, circuit_breaker, job)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         admission.release(campaign_id=job.campaign_id, provider_name=provider_name)
+    if outcome != JobOutcome.IN_FLIGHT:
         queue.ack(message_id)
+    return outcome
 
 
 def _dial(
@@ -150,10 +168,19 @@ def _dial(
     # arrives, the contact's status has likely already moved on (e.g. to
     # InConversation), which would otherwise make it look "ineligible"
     # rather than "already done." "Already done" must win.
+    from app.core.config import get_settings
+
+    # Dograh's trigger has no documented idempotency key, so for that engine
+    # the existence of ANY attempt row for this (contact, attempt_number)
+    # means a trigger was already attempted -- never re-trigger on it.
+    is_dograh = get_settings().calling_engine == "dograh"
+
     existing = attempts.get_by_contact_and_number(contact.id, job.attempt_number)
     if existing is not None and existing.provider_call_id is not None:
         logger.info("duplicate_delivery_ignored", extra={"job_id": job.job_id})
         return JobOutcome.ALREADY_PROCESSED
+    if existing is not None and is_dograh:
+        return _resolve_unresolved_dograh_claim(db, existing, contact, job)
 
     retry_policy = db.execute(
         select(RetryPolicy).where(RetryPolicy.campaign_id == campaign.id)
@@ -171,7 +198,7 @@ def _dial(
 
     attempt, created = attempts.get_or_create(contact.id, job.attempt_number)
 
-    if not created and attempt.provider_call_id is not None:
+    if not created and (attempt.provider_call_id is not None or is_dograh):
         # Lost a race with another delivery/worker between the
         # idempotency check above and claiming here.
         logger.info("duplicate_delivery_ignored", extra={"job_id": job.job_id})
@@ -184,6 +211,63 @@ def _dial(
 
     _place_call(db, provider, circuit_breaker, contact, attempt, job)
     return JobOutcome.ADMITTED_AND_DIALED
+
+
+def _resolve_unresolved_dograh_claim(
+    db: Session, existing: CallAttempt, contact: Contact, job: DialJob
+) -> str:
+    """A CallAttempt exists for this job but never recorded a Dograh run.
+    The claim is committed *before* the trigger request, so this means the
+    worker died (or lost its commit) somewhere around the trigger: the call
+    may or may not have been placed. Re-triggering could dial the contact
+    twice, so it is treated exactly like an ambiguous trigger timeout --
+    through RecoveryManager's backoff and eligibility re-checks."""
+    from app.core.config import get_settings
+
+    if existing.state != CallAttemptState.INITIATED:
+        return JobOutcome.ALREADY_PROCESSED  # already resolved and routed to recovery
+
+    settings = get_settings()
+    in_flight_seconds = (
+        settings.dograh_connect_timeout_seconds + settings.dograh_read_timeout_seconds + 5
+    )
+    if (datetime.now(UTC) - existing.started_at).total_seconds() < in_flight_seconds:
+        logger.info("dograh_claim_possibly_in_flight", extra={"job_id": job.job_id})
+        return JobOutcome.IN_FLIGHT
+
+    logger.warning(
+        "dograh_orphaned_claim_ambiguous",
+        extra={"attempt_id": str(existing.id), "contact_id": str(contact.id)},
+    )
+    _record_ambiguous_dograh_trigger(
+        db, existing, contact, status_code=None, category="orphaned_claim"
+    )
+    return JobOutcome.AMBIGUOUS_RECOVERY
+
+
+def _record_ambiguous_dograh_trigger(
+    db: Session,
+    attempt: CallAttempt,
+    contact: Contact,
+    *,
+    status_code: int | None,
+    category: str,
+) -> None:
+    attempt.provider = "dograh"
+    attempt.state = CallAttemptState.FAILED_TO_CONNECT
+    attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
+    attempt.ended_at = datetime.now(UTC)
+    db.add(
+        CallEvent(
+            call_attempt_id=attempt.id,
+            event_type="DOGRAH_TRIGGER_AMBIGUOUS",
+            payload={"status_code": status_code, "category": category},
+        )
+    )
+    db.flush()
+    _handle_never_connected_failure(
+        db, attempt, contact, NeverConnectedFailureReason.PROVIDER_ERROR
+    )
 
 
 def _place_call(
@@ -286,6 +370,11 @@ def _place_call_via_dograh(
         "trace_id": job.trace_id,
     }
     dograh_breaker = CircuitBreaker(get_redis(), "dograh")
+
+    # Durable claim BEFORE the non-idempotent trigger: if this process dies
+    # anywhere after the request leaves, the attempt row survives, so a
+    # reclaimed job sees it and recovers instead of dialing a second time.
+    db.commit()
 
     try:
         client = get_dograh_client()
