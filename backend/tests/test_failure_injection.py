@@ -601,7 +601,10 @@ def test_ambiguous_trigger_with_one_existing_run_is_adopted_not_redialed(
     (attempt,) = _attempts(contact_id)
     assert attempt.provider_call_id == str(adopted_run)
     assert attempt.state == CallAttemptState.INITIATED  # never CONNECTED: the webhook decides
-    assert _events(attempt.id)["DOGRAH_TRIGGER_RECONCILED"] == {"workflow_run_id": adopted_run}
+    assert _events(attempt.id)["DOGRAH_TRIGGER_RECONCILED"] == {
+        "workflow_run_id": adopted_run,
+        "stage": "first",
+    }
     assert _scheduled_for(contact_id, 3600) == 0  # no retry: the call already exists
     with _Session() as s:
         assert s.get(Contact, contact_id).status == ContactStatus.DIALING
@@ -648,7 +651,7 @@ def test_ambiguous_trigger_with_several_runs_never_picks_one_and_never_retries(
     with _Session() as s:
         audit = s.execute(
             text("SELECT count(*) FROM audit_log WHERE entity_id = :i AND action = :a"),
-            {"i": attempt.id, "a": "dograh.reconcile_multiple_candidates"},
+            {"i": attempt.id, "a": "dograh.reconciliation_multiple_runs"},
         ).scalar_one()
     assert audit == 1 and dograh.calls == 1 and _pending(queue) == 0
 

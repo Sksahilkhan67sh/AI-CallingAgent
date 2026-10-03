@@ -567,7 +567,7 @@ Dograh instance. Status keys: **VERIFIED** (executed, evidence cited) ·
 |------|--------|----------|
 | Dograh lifecycle | VERIFIED (mocked provider) | existing CP09 tests; full suite 393 passed twice |
 | Error taxonomy | VERIFIED | `test_dograh_client.py`, `test_dograh_reconciliation_client.py` |
-| Ambiguous request | PARTIAL | reconciliation adopts one run / refuses several / falls back on none or outage (`test_failure_injection.py`, 8 cases). Docs-only: Dograh's published OpenAPI, not a live instance. Residual race in §19.4 |
+| Ambiguous request | PARTIAL | first lookup (`test_failure_injection.py`, 8 cases) and a second lookup immediately before the retry (`test_reconciliation_retry_gate.py`, 27 cases incl. 2/8-worker races). Docs-only: Dograh's published OpenAPI, not a live instance. Residual window in §19.4 |
 | Queue recovery / ACK safety | VERIFIED | ack-after-commit; PG-transient, commit-after-trigger and orphaned-claim tests; fail against the pre-fix dialer |
 | Admission / circuit breaker | VERIFIED | Redis-down-in-admission fails closed; open circuit stops traffic then resumes |
 | Webhook auth | VERIFIED (unchanged) | CP09 tests |
@@ -613,11 +613,51 @@ retried, audited; none / provider error / timeout → unchanged RecoveryManager
 backoff. Dograh idempotency keys, HMAC signatures and a `call_status` enum remain
 undocumented and are not assumed.
 
-### 19.4 Residual limitation (DOCUMENTED)
+### 19.4 Second reconciliation before the retry (narrows the race; does not close it)
 
-"No run found" is not proof that no call exists: a timed-out trigger can still land
-after the lookup, and the 30s retry could then place a second call. A second lookup
-just before the retry is dispatched would narrow this; it is **DEFERRED**.
+The first lookup cannot prove absence: a timed-out trigger can still land after
+it. So when a retry that RecoveryManager has already approved is about to be
+dialed, `_second_reconciliation_gate` (dialer worker, after the eligibility
+check and before the attempt claim) looks the previous attempt up once more.
+It runs **only** when the previous attempt ended as an unresolved
+`DOGRAH_TRIGGER_AMBIGUOUS` with no run id — never for normal calls, completed
+calls, definite provider failures, or unrelated webhooks.
+
+| Second lookup | Action |
+|---|---|
+| exactly one run | adopt it on the previous attempt, no new trigger, audited |
+| several runs | choose none, trigger nothing, audited (same handling as the first lookup) |
+| none | the approved retry proceeds; no third lookup; retry count/backoff untouched |
+| timeout / API error / misconfigured | fail closed: no dial; job left **unacked** so a redelivery re-checks; audited |
+
+Safety properties, each with a test:
+
+- **RecoveryManager stays the only retry owner.** The gate adds no queue,
+  scheduler or loop; it can only block or adopt an already-due retry.
+- **Eligibility is never bypassed:** suppression, paused campaign and a closed
+  calling window refuse the job *before* any lookup.
+- **Concurrency:** the `(contact, attempt_number)` claim already bounds triggers
+  to one. The gate adds a short row lock on the previous attempt, taken only
+  after the HTTP lookup, so that concurrent workers adopt once rather than N times.
+  2 and 8 workers on one retry produce exactly one trigger (or one adoption).
+- **Idempotent:** once a run is adopted, a redelivered retry sees the previous
+  attempt active and stops; no new lookup, trigger or audit.
+- **Deliberate state exception:** adopting reopens the previous attempt
+  (`FAILED_TO_CONNECT` → `INITIATED`, contact → `DIALING`). The webhook refuses
+  terminal attempts, so without this the real call's outcome would be dropped.
+  It is limited to an ambiguous failure with no run id and exactly one match.
+  The attempt is never marked `CONNECTED`, and no `ConversationSession` is created.
+- **Observability:** logs and audit rows carry only campaign/contact/attempt/job
+  ids, run ids and error types (`reconciliation_first_lookup`,
+  `_second_lookup`, `_run_adopted`, `_no_run`, `_multiple_runs`,
+  `_lookup_timeout`, `_lookup_error`, `_retry_allowed`, `_retry_blocked`).
+
+**What this does not guarantee.** The second reconciliation reduces the race
+window but cannot provide an absolute distributed guarantee that a provider
+request will not complete immediately after the final lookup. The real
+protection is the combination of provider reconciliation, attempt claims,
+database constraints, RecoveryManager and idempotent processing. Not
+verified against a live Dograh instance.
 
 ### 19.5 Synthetic load test (backend capacity only)
 
@@ -663,5 +703,8 @@ test, not at 100K. Context only: 100K contacts/month averages ≈ 0.04 dials/s.
   timezone (10:00–18:00 UTC = 15:30–23:30 IST); needs a schema change.
 - An orphaned claim consumes one retry: double-dial avoidance is prioritised over the
   attempt budget.
-- **DEFERRED:** pre-retry re-reconciliation (§19.4); stale `INITIATED` sweeper for lost
-  webhooks.
+- **DOCUMENTED:** if the second lookup keeps failing (e.g. an API key that cannot
+  list runs), ambiguous retries are held unacked rather than dialed blind. This is
+  fail-closed by design, repeats one audited lookup per redelivery, and is not
+  auto-terminalized; watch `dograh.reconciliation_lookup_*` audit events.
+- **DEFERRED:** stale `INITIATED` sweeper for lost webhooks.
