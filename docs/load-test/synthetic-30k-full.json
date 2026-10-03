@@ -1,0 +1,86 @@
+{
+  "config": {
+    "contacts": 30000,
+    "workers": 8,
+    "webhook_threads": 8,
+    "dograh_latency_ms": 0.0,
+    "connect_rate": 0.35,
+    "port": 8765,
+    "json": "/home/claude/load_30k.json"
+  },
+  "1_contact_load": {
+    "contacts": 30000,
+    "secs": 1.7,
+    "contacts_per_s": 17653
+  },
+  "2_queue_ingestion": {
+    "jobs": 30000,
+    "secs": 2.67,
+    "jobs_per_s": 11232,
+    "p50_ms": 0.07,
+    "p95_ms": 0.14,
+    "p99_ms": 0.21
+  },
+  "3_admission": {
+    "ops": 20000,
+    "ops_per_s": 2415,
+    "p50_ms": 0.37,
+    "p95_ms": 0.64,
+    "p99_ms": 0.83
+  },
+  "4_worker_claim": {
+    "claims": 20000,
+    "claims_per_s": 7501,
+    "p50_ms": 0.11,
+    "p95_ms": 0.21,
+    "p99_ms": 0.28
+  },
+  "5_dial_pipeline": {
+    "jobs": 30000,
+    "workers": 8,
+    "secs": 328.35,
+    "jobs_per_s": 91.4,
+    "p50_ms": 83.61,
+    "p95_ms": 113.06,
+    "p99_ms": 139.48,
+    "worker_utilization_pct": 99.0,
+    "db_writes_per_s": 366,
+    "max_queue_depth": 29971,
+    "max_oldest_queue_age_s": 340.8,
+    "failed_jobs": 0,
+    "error_rate_pct": 0.0,
+    "unacked_pending_after": 0,
+    "call_attempts": 30000,
+    "fake_dograh_triggers": 30000,
+    "duplicate_attempts": 0,
+    "duplicate_runs": 0,
+    "duplicate_dials": 0
+  },
+  "6_webhook_ingestion": {
+    "events": 30000,
+    "threads": 8,
+    "secs": 368.95,
+    "events_per_s": 81.3,
+    "p50_ms": 94.62,
+    "p95_ms": 133.86,
+    "p99_ms": 183.65,
+    "db_writes_per_s": 546,
+    "errors": 0,
+    "error_rate_pct": 0.0,
+    "processed_event_rows": 30000,
+    "replay_sample": 500,
+    "replay_idempotent": 500,
+    "analysis_enqueued": 10500,
+    "retries_scheduled": 19500,
+    "note": "HTTP over loopback to a single uvicorn worker sharing 1 CPU with the load generator, Postgres and Redis"
+  },
+  "7_recovery_dispatch": {
+    "scheduled_retries": 19500,
+    "dispatched": 19500,
+    "calls": 391,
+    "secs": 93.11,
+    "drain_rate_per_s": 209,
+    "dispatch_loop_cap_per_s_when_idle": "derived from code, not measured: 50 jobs per call, one call per 10 worker-loop iterations, each idle iteration blocks up to 1s => ~5/s",
+    "attempts_per_contact_max_so_far": 1
+  }
+}

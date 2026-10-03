@@ -215,6 +215,9 @@ class _FakeDograhClient:
         self.result = result
         self.error = error
 
+    def find_runs_for_attempt(self, call_attempt_id, since):
+        return []  # reconciliation: Dograh has no run for this attempt
+
     def trigger_call(self, *, phone_number, initial_context):
         if self.error:
             raise self.error

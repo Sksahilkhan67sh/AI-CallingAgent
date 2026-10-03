@@ -1,0 +1,59 @@
+{
+  "config": {
+    "contacts": 100000,
+    "workers": 8,
+    "webhook_threads": 8,
+    "dograh_latency_ms": 0.0,
+    "connect_rate": 0.35,
+    "port": 8765,
+    "json": "/home/claude/load_100k.json"
+  },
+  "1_contact_load": {
+    "contacts": 100000,
+    "secs": 4.84,
+    "contacts_per_s": 20674
+  },
+  "2_queue_ingestion": {
+    "jobs": 100000,
+    "secs": 8.7,
+    "jobs_per_s": 11499,
+    "p50_ms": 0.07,
+    "p95_ms": 0.14,
+    "p99_ms": 0.19
+  },
+  "3_admission": {
+    "ops": 20000,
+    "ops_per_s": 2619,
+    "p50_ms": 0.34,
+    "p95_ms": 0.56,
+    "p99_ms": 0.79
+  },
+  "4_worker_claim": {
+    "claims": 20000,
+    "claims_per_s": 7879,
+    "p50_ms": 0.11,
+    "p95_ms": 0.21,
+    "p99_ms": 0.27
+  },
+  "5_dial_pipeline": {
+    "jobs": 100000,
+    "workers": 8,
+    "secs": 1076.19,
+    "jobs_per_s": 92.9,
+    "p50_ms": 82.18,
+    "p95_ms": 110.73,
+    "p99_ms": 139.38,
+    "worker_utilization_pct": 99.0,
+    "db_writes_per_s": 372,
+    "max_queue_depth": 99976,
+    "max_oldest_queue_age_s": 1087.1,
+    "failed_jobs": 0,
+    "error_rate_pct": 0.0,
+    "unacked_pending_after": 0,
+    "call_attempts": 100000,
+    "fake_dograh_triggers": 100000,
+    "duplicate_attempts": 0,
+    "duplicate_runs": 0,
+    "duplicate_dials": 0
+  }
+}
