@@ -60,6 +60,8 @@ extend them.
 
 ### 1.1 Known gap in this classification
 
+> **Updated by the post-merge validation pass — see §19.** Unrecognized `call_status` values are no longer treated as a connected conversation; the three-way split now has an explicit fourth, conservative bucket.
+
 A bare `"fail"` is deliberately **not** a dropped-mid-call keyword —
 it's ambiguous between "never connected" and "dropped mid-call"
 without more context, so only the more specific technical-failure
@@ -113,6 +115,8 @@ used to tell *which phase* timed out:
   rather than assume it didn't).
 
 ### 2.4 Ambiguous call creation (§1.3)
+
+> **Updated by the post-merge validation pass — see §19.** The statement below that no Dograh lookup capability exists is **superseded**: Dograh's published OpenAPI documents an org-wide run listing that carries `initial_context`, and the dialer now uses it to adopt an already-created run. Verified against the docs only, not a live instance.
 
 **VERIFIED** the behavior; **UNVERIFIED/honestly limited** the
 reconciliation story — read on.
@@ -238,6 +242,8 @@ a DLQ table is the natural next addition.
 
 ### 4.6 ACK safety
 
+> **Updated by the post-merge validation pass — see §19.** This section's claim was **not true of the code as merged**: the ack ran in a `finally` before the worker's commit. Fixed — ack now follows a durable commit.
+
 **Unchanged, verified by inspection** — `queue.ack(message_id)` in both
 the dialer and analysis workers already only happens after the
 relevant DB state has been flushed, matching §4.6 exactly as it
@@ -265,6 +271,8 @@ later — `extra="ignore"`, not `"forbid"`). 5 tests cover rejection
 missing optional fields).
 
 ### 5.3 Replay protection / idempotency (§3.3, §3.4)
+
+> **Updated by the post-merge validation pass — see §19.** The concurrent-duplicate race documented here is **fixed** (claim-first in a SAVEPOINT; the unique constraint remains the authority) and covered by 2/8/16-way real-thread tests.
 
 **VERIFIED.** Reuses the existing `ProcessedEvent` model and the exact
 idiom already used by the Twilio-style telephony webhook
@@ -505,6 +513,8 @@ established pattern since Checkpoint 03) but this belief is
 
 ## 17. Known limitations (consolidated)
 
+> **Updated by the post-merge validation pass — see §19.** Several items below were closed or re-scoped by §19; §19.6 is the current list.
+
 - Dograh E2E not verified against a live instance (§14).
 - Ambiguous-timeout retry safety relies on `RecoveryManager`'s backoff
   window, not active provider reconciliation — no verified Dograh API
@@ -539,3 +549,119 @@ WEBHOOK_RATE_LIMIT_PER_MINUTE=120
 their dev-only defaults, and, when `CALLING_ENGINE=dograh`:
 `DOGRAH_API_KEY`, `DOGRAH_TRIGGER_UUID` set and
 `DOGRAH_TRIGGER_MODE=production`.
+
+
+---
+
+## 19. Post-merge validation pass
+
+PR #28 (and #29, `develop` → `main`) were already merged when this pass ran, so
+this work lives on a follow-up branch. Nothing here was verified against a live
+Dograh instance. Status keys: **VERIFIED** (executed, evidence cited) ·
+**UNVERIFIED** · **BLOCKED BY ENVIRONMENT** · **DOCUMENTED LIMITATION** ·
+**DEFERRED**.
+
+### 19.1 Evidence table
+
+| Area | Status | Evidence |
+|------|--------|----------|
+| Dograh lifecycle | VERIFIED (mocked provider) | existing CP09 tests; full suite 393 passed twice |
+| Error taxonomy | VERIFIED | `test_dograh_client.py`, `test_dograh_reconciliation_client.py` |
+| Ambiguous request | PARTIAL | reconciliation adopts one run / refuses several / falls back on none or outage (`test_failure_injection.py`, 8 cases). Docs-only: Dograh's published OpenAPI, not a live instance. Residual race in §19.4 |
+| Queue recovery / ACK safety | VERIFIED | ack-after-commit; PG-transient, commit-after-trigger and orphaned-claim tests; fail against the pre-fix dialer |
+| Admission / circuit breaker | VERIFIED | Redis-down-in-admission fails closed; open circuit stops traffic then resumes |
+| Webhook auth | VERIFIED (unchanged) | CP09 tests |
+| Webhook replay / concurrency | VERIFIED | 2/8/16-way real-thread tests (6/6 fail without the fix); 500/500 replays idempotent at 30K |
+| Failure injection | VERIFIED, injected faults | PG error injected as `OperationalError` (no real PG outage); Redis outage via a client that raises `ConnectionError`; retry storm; real SIGTERM against `worker.run()` |
+| Live Dograh E2E | UNVERIFIED — BLOCKED BY ENVIRONMENT | no Dograh instance, API key, webhook secret or authorized number available |
+| 100K load validation | PARTIAL | dial stage at 100,000 jobs; webhook/DB-write/recovery stages at 30,000 (§19.5) |
+| Security | VERIFIED (static) | diff scans: no secrets, no debug artifacts, no PII in new log lines, no frontend changes |
+| Production readiness | **BLOCKED** | live E2E and the `call_status` vocabulary (§19.6) are unverified |
+
+### 19.2 Defects found and fixed
+
+1. **ACK before commit (§4.6 was untrue as merged).** `process_claimed_job` acked
+   in a `finally`, before the worker committed: a transient DB error lost the job,
+   and a failed commit after a successful trigger left a placed call with no durable
+   record. Now: commit → ack; any failure rolls back and leaves the message pending.
+2. **Duplicate dial on re-delivery.** For Dograh (no idempotency key) an existing
+   attempt without a `provider_call_id` — i.e. every failed trigger — was re-triggered.
+   Now any existing attempt blocks a re-trigger. The claim is committed *before* the
+   trigger; an unresolved claim older than the request timeouts is treated as an
+   ambiguous trigger and goes through RecoveryManager; a younger one is left unacked
+   (it may still be in flight).
+3. **Concurrent duplicate webhook → 500.** The event is now claimed first in a
+   SAVEPOINT; the unique constraint stays the authority and a conflict is an
+   idempotent no-op. Applied to the telephony webhook too (same race).
+4. **Unsafe `call_status` fallback.** Unknown values were silently "ended normally".
+   Normal completion is now matched on whole tokens (`incomplete` ≠ `complete`);
+   anything unrecognized is a never-connected provider error — never a connected
+   conversation — routed only through RecoveryManager and audited.
+5. **Test suite not repeatable.** A second run on unmodified `main` failed 5 tests
+   (committed rows leaked). `conftest.py` now truncates the test DB once per session.
+
+### 19.3 Ambiguous-request reconciliation (supersedes §2.4)
+
+Dograh documents `GET /api/v1/organizations/usage/runs` (`start_date`/`end_date`
+bound `created_at`; `limit` ≤ 100; each run carries `initial_context`). There is no
+server-side filter on an arbitrary `initial_context` key, so
+`DograhClient.find_runs_for_attempt` matches our round-tripped `call_attempt_id`
+client-side over a bounded window (5 pages × 100). A window larger than that bound
+raises instead of returning "none". Outcomes: exactly one run → adopted (state stays
+`INITIATED`, never `CONNECTED`; the webhook decides); several → never chosen, never
+retried, audited; none / provider error / timeout → unchanged RecoveryManager
+backoff. Dograh idempotency keys, HMAC signatures and a `call_status` enum remain
+undocumented and are not assumed.
+
+### 19.4 Residual limitation (DOCUMENTED)
+
+"No run found" is not proof that no call exists: a timed-out trigger can still land
+after the lookup, and the 30s retry could then place a second call. A second lookup
+just before the retry is dispatched would narrow this; it is **DEFERRED**.
+
+### 19.5 Synthetic load test (backend capacity only)
+
+Harness: `backend/scripts/load_test_backend.py`; raw results in `docs/load-test/`.
+Fake Dograh, real PostgreSQL and Redis, real uvicorn for webhooks. Environment:
+**1 CPU / 4 GB shared by the load generator, uvicorn, PostgreSQL and Redis**, so
+figures are pessimistic. They are BACKEND capacity — not real Dograh capacity and
+not telephony/carrier capacity; no real call was placed.
+
+| Stage | 100,000 contacts | 30,000 contacts |
+|---|---|---|
+| Contact load | 20,674/s | — |
+| Queue ingestion | 11,499 jobs/s | — |
+| Admission | 2,619 ops/s (p50 0.34 / p95 0.56 / p99 0.79 ms) | — |
+| Worker claim | 7,879/s (p50 0.11 / p95 0.21 / p99 0.27 ms) | — |
+| Dial pipeline (8 workers) | 92.9 jobs/s; p50 82 / p95 111 / p99 139 ms; util 99%; ~372 DB writes/s | 91.4 jobs/s; p50 84 / p95 113 / p99 139 ms |
+| Failed jobs / error rate | 0 / 0% | 0 / 0% |
+| Duplicate attempts / runs / dials | 0 / 0 / 0 | 0 / 0 / 0 |
+| Webhook ingestion (8 threads) | not completed | 81.3 events/s; p50 95 / p95 134 / p99 184 ms; ~546 DB writes/s; 0 errors |
+| Replay under load | — | 500/500 `already_processed` |
+| Outcome mix | — | 10,500 analysis enqueued (35%), 19,500 retries scheduled (65%) |
+| Recovery dispatch drain | — | 19,500 jobs in 93 s (209/s) |
+
+A first 100K run lost its webhook stage to an environment reset before results were
+saved; the harness now persists each stage as it completes. "Max queue depth" /
+"oldest age" in the dial stage are the pre-loaded backlog draining, not instability.
+Retry boundedness (max 3 attempts, 30 s / 10 min) is proven by the 30-contact storm
+test, not at 100K. Context only: 100K contacts/month averages ≈ 0.04 dials/s.
+
+### 19.6 Current limitations / pre-go-live gate
+
+- **BLOCKED BY ENVIRONMENT:** live Dograh E2E (tests A–F) not run.
+- **UNVERIFIED:** the normal-completion token list (`hangup, completed, complete,
+  finished, success, successful`) against real Dograh output. If it misses real
+  values, completed calls would be retried (≤ 2×). Confirm on the first live calls via
+  the `classification: unrecognized` audit field.
+- **DOCUMENTED:** webhook rate limit is per source IP (default 120/min) and Dograh does
+  not retry non-200 by default — a burst above the limit drops completions. Size it
+  (`WEBHOOK_RATE_LIMIT_PER_MINUTE`) before scaling concurrency.
+- **DOCUMENTED:** recovery dispatch is 50 jobs per call, one call per 10 worker
+  iterations (≈ 5/s when idle, derived from code).
+- **DOCUMENTED (pre-existing):** calling window is UTC wall-clock with no per-campaign
+  timezone (10:00–18:00 UTC = 15:30–23:30 IST); needs a schema change.
+- An orphaned claim consumes one retry: double-dial avoidance is prioritised over the
+  attempt budget.
+- **DEFERRED:** pre-retry re-reconciliation (§19.4); stale `INITIATED` sweeper for lost
+  webhooks.
