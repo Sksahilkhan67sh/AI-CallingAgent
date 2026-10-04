@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.schemas.admin import ComponentHealth
 from app.services.admin.system_service import check_postgres, check_redis
 
 router = APIRouter(tags=["Health"])
@@ -41,6 +42,19 @@ def get_readiness(response: Response, db: Session = Depends(get_db)) -> dict:
     duplicated.
     """
     components = [check_postgres(db), check_redis()]
+    # CP10: with calling_engine=dograh a missing credential means no call can
+    # ever be placed -- report it here (no network call, just the settings)
+    # instead of letting the first dial discover it.
+    settings = get_settings()
+    if settings.calling_engine == "dograh":
+        configured = bool(settings.dograh_api_key and settings.dograh_trigger_uuid)
+        components.append(
+            ComponentHealth(
+                name="Dograh configuration",
+                status="ok" if configured else "degraded",
+                detail=None if configured else "DOGRAH_API_KEY / DOGRAH_TRIGGER_UUID not set",
+            )
+        )
     all_ok = all(c.status == "ok" for c in components)
     if not all_ok:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE

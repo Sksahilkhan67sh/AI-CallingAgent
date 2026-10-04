@@ -24,6 +24,8 @@ from app.services.telephony.circuit_breaker import CircuitBreaker
 from app.services.telephony.factory import get_telephony_provider
 
 logging.basicConfig(level=logging.INFO)
+# CP10: httpx's INFO request log would print Dograh's trigger URL (it embeds the trigger UUID).
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("worker")
 
 _shutdown_requested = False
