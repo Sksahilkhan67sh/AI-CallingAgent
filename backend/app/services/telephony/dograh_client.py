@@ -46,6 +46,16 @@ AMBIGUOUS_CATEGORIES = frozenset(
     {DograhErrorCategory.AMBIGUOUS_REQUEST, DograhErrorCategory.TIMEOUT}
 )
 
+# CP10: 5xx statuses where the request demonstrably reached Dograh's
+# application tier and may have created the run before failing (generic
+# 500, or a gateway that gave up waiting on the app: 502/504). Treated as
+# ambiguous so the worker reconciles instead of blindly retriggering a
+# possible second call. 503 (and other 5xx) stays a definite
+# PROVIDER_UNAVAILABLE: a load-shedding/maintenance response means the
+# trigger was not processed. UNVERIFIED against a live Dograh instance.
+_AMBIGUOUS_SERVER_STATUSES = frozenset({500, 502, 504})
+_MAX_DETAIL_LEN = 200  # provider error text is untrusted; bound what we keep/raise
+
 _RECONCILE_PAGE_SIZE = 100  # Dograh's documented maximum
 _RECONCILE_MAX_PAGES = 5
 _RECONCILE_WINDOW_PADDING = timedelta(seconds=60)  # clock skew between us and Dograh
@@ -86,6 +96,8 @@ def _classify_status_code(status_code: int) -> DograhErrorCategory:
         # Trigger UUID not found -- a configuration problem Dograh
         # validly rejected, not ambiguous and not a transient failure.
         return DograhErrorCategory.PROVIDER_REJECTED
+    if status_code in _AMBIGUOUS_SERVER_STATUSES:
+        return DograhErrorCategory.AMBIGUOUS_REQUEST
     if status_code >= 500:
         return DograhErrorCategory.PROVIDER_UNAVAILABLE
     if 400 <= status_code < 500:
@@ -164,6 +176,16 @@ class DograhClient:
             raise DograhApiError(
                 0, f"request timed out: {exc}", category=DograhErrorCategory.TIMEOUT
             ) from exc
+        except (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as exc:
+            # CP10: the connection was up and the request (partly) sent, then
+            # it was reset or the server hung up without answering. Same
+            # "response lost" case as a read timeout: Dograh may have created
+            # the run, so this must be reconciled, never blindly retried.
+            raise DograhApiError(
+                0,
+                f"connection lost after the request was sent: {type(exc).__name__}",
+                category=DograhErrorCategory.AMBIGUOUS_REQUEST,
+            ) from exc
         except httpx.ConnectError as exc:
             raise DograhApiError(
                 0, f"connection failed: {exc}", category=DograhErrorCategory.CONNECTION_ERROR
@@ -190,11 +212,7 @@ class DograhClient:
             headers={"Content-Type": "application/json", "X-API-Key": self.api_key},
             json={"phone_number": phone_number, "initial_context": initial_context},
         )
-        body = response.json()
-        return DograhTriggerResult(
-            workflow_run_id=body["workflow_run_id"],
-            workflow_run_name=body.get("workflow_run_name", ""),
-        )
+        return _parse_trigger_response(response)
 
     def find_runs_for_attempt(self, call_attempt_id: str, since: datetime) -> list[int]:
         """Reconciliation for an ambiguous trigger: which Dograh runs, if any,
@@ -253,11 +271,35 @@ class DograhClient:
         )
 
 
+def _parse_trigger_response(response: httpx.Response) -> DograhTriggerResult:
+    """A 2xx whose body we cannot trust (not JSON, not an object, or no
+    positive-integer `workflow_run_id`) must never be read as "no call was
+    placed": Dograh accepted the request, so a run may well exist. It is
+    reported as AMBIGUOUS_REQUEST so the worker reconciles instead of
+    retriggering."""
+    try:
+        body = response.json()
+        run_id = body["workflow_run_id"]
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+            raise ValueError("workflow_run_id is not a positive integer")
+        run_name = body.get("workflow_run_name", "")
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise DograhApiError(
+            response.status_code,
+            "malformed trigger response (no usable workflow_run_id)",
+            category=DograhErrorCategory.AMBIGUOUS_REQUEST,
+        ) from exc
+    return DograhTriggerResult(
+        workflow_run_id=run_id, workflow_run_name=run_name if isinstance(run_name, str) else ""
+    )
+
+
 def _extract_detail(response: httpx.Response) -> str:
+    text = response.text
     try:
         body = response.json()
         if isinstance(body, dict):
-            return str(body.get("detail") or body.get("message") or response.text)
+            text = str(body.get("detail") or body.get("message") or text)
     except ValueError:
         pass
-    return response.text
+    return text[:_MAX_DETAIL_LEN]

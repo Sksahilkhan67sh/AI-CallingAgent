@@ -132,7 +132,7 @@ def test_unrecognized_status_is_audited_creates_no_session_and_uses_recovery(
 ):
     contact, attempt = _attempt(db_session, "555-961-0001")
 
-    response = _post(client, attempt, 2001, "mystery_status")
+    response = _post(client, attempt, 77, "mystery_status")
 
     assert response.status_code == 200
     assert response.json()["outcome"] == "never_connected"
@@ -171,6 +171,6 @@ def test_unrecognized_status_still_respects_suppression(client, db_session):
     )
     db_session.commit()
 
-    assert _post(client, attempt, 2002, "mystery_status").status_code == 200
+    assert _post(client, attempt, 77, "mystery_status").status_code == 200
     db_session.refresh(contact)
     assert contact.status != ContactStatus.RETRY_SCHEDULED  # suppression always wins

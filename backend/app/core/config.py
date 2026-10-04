@@ -14,9 +14,15 @@ secrets manager -- never via committed files.
 """
 
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
+_CALLING_ENGINES = frozenset({"native", "dograh"})
+_DOGRAH_TRIGGER_MODES = frozenset({"test", "production"})
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 
 class Settings(BaseSettings):
@@ -121,6 +127,10 @@ class Settings(BaseSettings):
     # timeouts -- see app/services/telephony/dograh_client.py.
     dograh_connect_timeout_seconds: float = 5.0
     dograh_read_timeout_seconds: float = 15.0
+    # CP10: extra hosts (beyond the Dograh API host) whose private-network
+    # addresses the transcript fetch may reach, e.g. a self-hosted object
+    # store. Empty by default; loopback/link-local/metadata are never allowed.
+    dograh_transcript_extra_hosts: list[str] = []
     # Shared secret we tell Dograh's Webhook node to send back (as a
     # Bearer token or an X-API-Key header, either is accepted) --
     # same "env-configured secret, dev-only-insecure default"
@@ -150,6 +160,49 @@ class Settings(BaseSettings):
     # the middle -- see app/services/analysis/transcript.py.
     analysis_max_transcript_messages: int = 200
 
+    # --- Provider/voice config validation (Checkpoint 10) ---
+    # Every value below is a closed set whose typo would otherwise fail
+    # OPEN: an unknown ENVIRONMENT skips the production checks entirely, an
+    # unknown CALLING_ENGINE silently runs the native/mock engine, and an
+    # unknown DOGRAH_TRIGGER_MODE silently hits Dograh's /test/ endpoint.
+    @model_validator(mode="after")
+    def _validate_provider_config(self) -> "Settings":
+        problems: list[str] = []
+
+        if self.environment not in _ENVIRONMENTS:
+            problems.append(f"ENVIRONMENT must be one of {sorted(_ENVIRONMENTS)}")
+        if self.calling_engine not in _CALLING_ENGINES:
+            problems.append(f"CALLING_ENGINE must be one of {sorted(_CALLING_ENGINES)}")
+        if self.dograh_trigger_mode not in _DOGRAH_TRIGGER_MODES:
+            problems.append(f"DOGRAH_TRIGGER_MODE must be one of {sorted(_DOGRAH_TRIGGER_MODES)}")
+        if self.dograh_connect_timeout_seconds <= 0 or self.dograh_read_timeout_seconds <= 0:
+            problems.append(
+                "DOGRAH_CONNECT_TIMEOUT_SECONDS and DOGRAH_READ_TIMEOUT_SECONDS must be > 0"
+            )
+
+        if self.calling_engine == "dograh":
+            parsed = urlparse(self.dograh_api_base_url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                problems.append("DOGRAH_API_BASE_URL must be an http(s) URL with a host")
+            if self.environment == "staging":
+                if not self.dograh_api_key:
+                    problems.append("DOGRAH_API_KEY is required when CALLING_ENGINE=dograh")
+                if not self.dograh_trigger_uuid:
+                    problems.append("DOGRAH_TRIGGER_UUID is required when CALLING_ENGINE=dograh")
+            if self.environment == "production" and (
+                parsed.scheme != "https" or (parsed.hostname or "") in _LOCAL_HOSTS
+            ):
+                problems.append(
+                    "DOGRAH_API_BASE_URL must be an https URL to a non-local host in production "
+                    "(the API key is sent on every request)"
+                )
+
+        if problems:
+            raise ValueError(
+                "Invalid provider/voice configuration:\n  - " + "\n  - ".join(problems)
+            )
+        return self
+
     # --- Production config validation (Checkpoint 09 §10) ---
     # "Do not silently use development defaults in production." Every
     # value checked here is a dev-only-insecure default that already
@@ -174,6 +227,14 @@ class Settings(BaseSettings):
         for field_name, insecure_default in _DEV_DEFAULTS.items():
             if getattr(self, field_name) == insecure_default:
                 problems.append(f"{field_name.upper()} is still set to its dev-only default")
+
+        # CP10: every native provider is still a mock, so production on the
+        # native engine would "place" fake calls. Never a silent fallback.
+        if self.calling_engine != "dograh":
+            problems.append(
+                "CALLING_ENGINE must be 'dograh' when ENVIRONMENT=production "
+                "(the native engine only has mock providers)"
+            )
 
         if self.calling_engine == "dograh":
             if not self.dograh_api_key:

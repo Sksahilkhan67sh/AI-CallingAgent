@@ -1,5 +1,7 @@
 """FastAPI application entrypoint."""
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -20,6 +22,10 @@ from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 
 settings = get_settings()
+
+# CP10: httpx logs every request URL at INFO, and Dograh's trigger URL embeds the
+# trigger UUID (and a transcript_url may be a pre-signed link). Keep those out of logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI(title=settings.app_name)
 
