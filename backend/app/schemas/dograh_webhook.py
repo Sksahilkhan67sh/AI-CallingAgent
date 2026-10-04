@@ -26,6 +26,12 @@ class DograhWebhookPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")  # tolerate Dograh adding template variables later
 
     call_attempt_id: str = Field(min_length=1, max_length=64)
+    # CP10: optional echoes of the initial_context we send. When present they
+    # must match the attempt's own contact/campaign (see
+    # dograh_webhook_service._validate_correlation); absent => not checked, so
+    # a workflow still on the CP08 payload_template keeps working.
+    contact_id: str | None = Field(default=None, max_length=64)
+    campaign_id: str | None = Field(default=None, max_length=64)
     workflow_run_id: int | str | None = None
     call_status: str | None = Field(default=None, max_length=_MAX_STATUS_LEN)
     call_disposition: str | None = Field(default=None, max_length=_MAX_STATUS_LEN)

@@ -21,16 +21,20 @@ dropped mid-call / ended normally), not the two-way split Checkpoint
 08 shipped with.
 """
 
+import ipaddress
 import logging
 import re
+import socket
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -116,6 +120,9 @@ class _Classification:
     mid_call_reason: MidCallDisconnectReason | None = None
     never_connected_reason: NeverConnectedFailureReason | None = None
     recognized: bool = True
+    # CP10: which input decided this -- "status", "disposition",
+    # "unrecognized" or "conflict". Audit metadata only; never branches logic.
+    basis: str = "status"
 
 
 def _classify(call_status: str | None) -> _Classification:
@@ -149,7 +156,53 @@ def _classify(call_status: str | None) -> _Classification:
         CallAttemptState.FAILED_TO_CONNECT,
         never_connected_reason=NeverConnectedFailureReason.PROVIDER_ERROR,
         recognized=False,
+        basis="unrecognized",
     )
+
+
+def _normalize(call_status: str | None, call_disposition: str | None) -> _Classification:
+    """CP10: one deterministic mapping from Dograh's (call_status,
+    call_disposition) to our lifecycle classification.
+
+    `call_status` is Dograh's "observed reason the call ended" and is the
+    lifecycle authority. `call_disposition` is a workflow-defined business
+    outcome that merely falls back to the termination reason, so:
+      * an unrecognized disposition says nothing (business codes are free text);
+      * a recognized failure disposition may supply the outcome when the status
+        is unrecognized/empty -- acting on a failure signal is the safe direction;
+      * a normal-completion disposition NEVER rescues an unrecognized status --
+        unknown must not become success;
+      * a recognized status and a recognized disposition that disagree on
+        "ended normally vs. did not" are a CONFLICT: not trusted as a success,
+        routed to the same conservative never-connected/provider-error path as
+        an unrecognized status, and audited as such.
+    """
+    by_status = _classify(call_status)
+    if not (call_disposition or "").strip():
+        return by_status
+    by_disposition = _classify(call_disposition)
+    if not by_disposition.recognized:
+        return by_status
+
+    status_normal = by_status.state == CallAttemptState.ENDED_NORMALLY
+    disposition_normal = by_disposition.state == CallAttemptState.ENDED_NORMALLY
+    if not by_status.recognized:
+        if disposition_normal:
+            return by_status
+        return _Classification(
+            by_disposition.state,
+            mid_call_reason=by_disposition.mid_call_reason,
+            never_connected_reason=by_disposition.never_connected_reason,
+            basis="disposition",
+        )
+    if status_normal != disposition_normal:
+        return _Classification(
+            CallAttemptState.FAILED_TO_CONNECT,
+            never_connected_reason=NeverConnectedFailureReason.PROVIDER_ERROR,
+            recognized=False,
+            basis="conflict",
+        )
+    return by_status
 
 
 def _already_processed(payload: DograhWebhookPayload) -> "DograhWebhookResult":
@@ -160,14 +213,52 @@ def _already_processed(payload: DograhWebhookPayload) -> "DograhWebhookResult":
     return DograhWebhookResult(call_attempt_id=attempt_id, outcome="already_processed")
 
 
+def _is_safe_transcript_url(url: str) -> bool:
+    """CP10 SSRF guard: `transcript_url` comes from the webhook body, so it is
+    fetched only if no resolved address is loopback, link-local (cloud
+    metadata), unspecified, multicast or reserved, and a private-network
+    address is fetched only when the host is Dograh's own configured host or
+    one the operator listed in DOGRAH_TRANSCRIPT_EXTRA_HOSTS. Redirects are
+    never followed. Residual risk: DNS rebinding between this check and the
+    fetch (documented in docs/CHECKPOINT-10-NOTES.md)."""
+    settings = get_settings()
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    trusted_hosts = {
+        urlparse(settings.dograh_api_base_url).hostname,
+        *settings.dograh_transcript_extra_hosts,
+    }
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except OSError:
+        return False
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%")[0])
+        if (
+            ip.is_loopback
+            or ip.is_link_local
+            or ip.is_unspecified
+            or ip.is_multicast
+            or ip.is_reserved
+        ):
+            return False
+        if ip.is_private and host not in trusted_hosts:
+            return False
+    return True
+
+
 def _fetch_transcript_lines(transcript_url: str) -> list[dict]:
     """Best-effort only -- Dograh's transcript export format isn't
     fixed in its published docs (transcript_url is just "a public
     download URL"). Never raises: a fetch/parse failure here must not
     fail webhook processing -- the call's terminal-state transition is
     the important, durable part."""
+    if not _is_safe_transcript_url(transcript_url):
+        logger.warning("dograh_transcript_url_blocked")
+        return []
     try:
-        response = httpx.get(transcript_url, timeout=15.0)
+        response = httpx.get(transcript_url, timeout=15.0, follow_redirects=False)
         response.raise_for_status()
         data = response.json()
     except Exception:
@@ -208,6 +299,62 @@ def _populate_transcript(
         )
 
 
+def _reject_correlation(
+    db: Session, payload: DograhWebhookPayload, attempt: CallAttempt, problem: str
+) -> DograhWebhookError:
+    """A webhook that does not belong to this attempt: audit it, mutate
+    nothing, answer 409. The audit row is committed here because the request
+    is about to fail and get_db rolls back on an exception."""
+    record_audit_event(
+        db,
+        actor=_ACTOR,
+        action="dograh.webhook_correlation_rejected",
+        entity_type="call_attempt",
+        entity_id=attempt.id,
+        metadata={"problem": problem, "workflow_run_id": str(payload.workflow_run_id)},
+    )
+    db.commit()
+    logger.warning(
+        "dograh_webhook_correlation_rejected",
+        extra={"attempt_id": str(attempt.id), "problem": problem},
+    )
+    return DograhWebhookError(409, "Webhook does not correlate to this call attempt")
+
+
+def _validate_correlation(
+    db: Session,
+    payload: DograhWebhookPayload,
+    attempt: CallAttempt,
+    contact: Contact,
+    unresolved_ambiguous: bool,
+) -> None:
+    """CP10: a webhook may only touch the attempt it belongs to. Checked
+    before any state change and before the terminal-attempt no-op, so a wrong
+    callback is rejected and audited rather than silently accepted."""
+    if attempt.provider not in (None, "dograh"):
+        raise _reject_correlation(db, payload, attempt, "attempt_not_dograh")
+    if payload.contact_id is not None and payload.contact_id != str(attempt.contact_id):
+        raise _reject_correlation(db, payload, attempt, "contact_mismatch")
+    if payload.campaign_id is not None and payload.campaign_id != str(contact.campaign_id):
+        raise _reject_correlation(db, payload, attempt, "campaign_mismatch")
+
+    if payload.workflow_run_id is None:
+        return
+    run_id = str(payload.workflow_run_id)
+    if attempt.provider_call_id is not None and attempt.provider_call_id != run_id:
+        raise _reject_correlation(db, payload, attempt, "run_mismatch")
+    if attempt.provider_call_id is None or unresolved_ambiguous:
+        # About to adopt this run for the attempt: it must not already
+        # belong to a different attempt (uq_call_attempt_provider_call_id).
+        owner = db.execute(
+            select(CallAttempt.id).where(
+                CallAttempt.provider_call_id == run_id, CallAttempt.id != attempt.id
+            )
+        ).first()
+        if owner is not None:
+            raise _reject_correlation(db, payload, attempt, "run_owned_by_other_attempt")
+
+
 def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> DograhWebhookResult:
     # Checkpoint 09 §3.3/§3.4: replay protection + idempotency via the
     # same ProcessedEvent model/idiom the existing telephony webhook
@@ -240,6 +387,13 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     # completion webhook is proof the run exists -- dropping it would lose the
     # real call's outcome.
     unresolved_ambiguous = is_unresolved_ambiguous_trigger(db, attempt)
+
+    contact = db.get(Contact, attempt.contact_id)
+    campaign = db.get(Campaign, contact.campaign_id) if contact is not None else None
+    if contact is None or campaign is None:
+        raise DograhWebhookError(404, "Contact or campaign for this call attempt is missing")
+
+    _validate_correlation(db, payload, attempt, contact, unresolved_ambiguous)
     if not unresolved_ambiguous and attempt.state in (
         CallAttemptState.ENDED_NORMALLY,
         CallAttemptState.DROPPED_MID_CALL,
@@ -247,12 +401,7 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     ):
         return DograhWebhookResult(call_attempt_id=attempt.id, outcome="already_processed")
 
-    contact = db.get(Contact, attempt.contact_id)
-    campaign = db.get(Campaign, contact.campaign_id) if contact is not None else None
-    if contact is None or campaign is None:
-        raise DograhWebhookError(404, "Contact or campaign for this call attempt is missing")
-
-    classification = _classify(payload.call_status)
+    classification = _normalize(payload.call_status, payload.call_disposition)
     state = classification.state
     disconnect_reason = classification.mid_call_reason
     never_connected_reason = classification.never_connected_reason
@@ -263,6 +412,17 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     # idempotent no-ops that have mutated nothing.
     if not claim_event(db, event_id, _EVENT_TYPE):
         return DograhWebhookResult(call_attempt_id=attempt.id, outcome="already_processed")
+
+    if (
+        not unresolved_ambiguous
+        and attempt.provider_call_id is None
+        and payload.workflow_run_id is not None
+    ):
+        # The completion webhook beat the dialer's own trigger-response
+        # bookkeeping: remember which run this attempt belongs to. The dialer
+        # later writes the same value, so the order of the two is irrelevant.
+        attempt.provider = "dograh"
+        attempt.provider_call_id = str(payload.workflow_run_id)
 
     if unresolved_ambiguous:
         reopen_for_adoption(attempt, contact)
@@ -295,6 +455,8 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
                 "call_status": payload.call_status,
                 "reason": never_connected_reason.value,
                 "classification": "recognized" if classification.recognized else "unrecognized",
+                "basis": classification.basis,
+                "call_disposition": payload.call_disposition,
             },
         )
         if not classification.recognized:
@@ -349,7 +511,11 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
         action="call_attempt.dropped_mid_call_via_dograh_webhook",
         entity_type="call_attempt",
         entity_id=attempt.id,
-        metadata={"call_status": payload.call_status, "reason": disconnect_reason.value},
+        metadata={
+            "call_status": payload.call_status,
+            "reason": disconnect_reason.value,
+            "basis": classification.basis,
+        },
     )
     RecoveryManager(db, get_recovery_scheduler()).handle_disconnect(
         attempt, contact, campaign, never_connected=False, reason_key=disconnect_reason.value

@@ -608,12 +608,20 @@ def _place_call_via_dograh(
             phone_number=contact.normalized_phone_number, initial_context=initial_context
         )
     except DograhConfigurationError:
-        logger.exception("dograh_not_configured", extra=log_extra)
-        attempt.provider = "dograh"
-        attempt.state = CallAttemptState.FAILED_TO_CONNECT
-        attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
-        attempt.ended_at = datetime.now(UTC)
-        db.flush()
+        # Raised while building the client, i.e. before any request left this
+        # process, so no call can exist. Recorded and audited like every other
+        # trigger failure (the contact must not be left stranded in DIALING)
+        # and handed to RecoveryManager's bounded policy. Not a provider-health
+        # signal, so the circuit breaker is not touched.
+        logger.error("dograh_not_configured", extra=log_extra)
+        _record_dograh_trigger_failure(
+            db,
+            attempt,
+            contact,
+            event_type="DOGRAH_CONFIGURATION_ERROR",
+            status_code=None,
+            category="configuration_error",
+        )
         return None
     except DograhApiError as exc:
         is_ambiguous = exc.category in AMBIGUOUS_CATEGORIES

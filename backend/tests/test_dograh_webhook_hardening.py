@@ -58,7 +58,7 @@ def test_never_answered_status_is_classified_as_never_connected(client, db_sessi
         "/api/v1/webhooks/dograh/call-completed",
         json={
             "call_attempt_id": str(attempt.id),
-            "workflow_run_id": 1001,
+            "workflow_run_id": 99,
             "call_status": "no_answer",
         },
         headers=_headers(),
@@ -78,7 +78,7 @@ def test_busy_status_maps_to_busy_reason(client, db_session):
 
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
-        json={"call_attempt_id": str(attempt.id), "workflow_run_id": 1002, "call_status": "busy"},
+        json={"call_attempt_id": str(attempt.id), "workflow_run_id": 99, "call_status": "busy"},
         headers=_headers(),
     )
 
@@ -98,7 +98,7 @@ def test_never_connected_call_gets_no_conversation_session(client, db_session):
         "/api/v1/webhooks/dograh/call-completed",
         json={
             "call_attempt_id": str(attempt.id),
-            "workflow_run_id": 1003,
+            "workflow_run_id": 99,
             "call_status": "no_answer",
         },
         headers=_headers(),
@@ -120,7 +120,7 @@ def test_duplicate_workflow_run_id_is_a_processed_event_noop(client, db_session)
     _, _, attempt = _initiated_call(db_session, phone="555-970-0005")
     payload = {
         "call_attempt_id": str(attempt.id),
-        "workflow_run_id": 2001,
+        "workflow_run_id": 99,
         "call_status": "user_hangup",
     }
 
@@ -135,7 +135,7 @@ def test_duplicate_workflow_run_id_is_a_processed_event_noop(client, db_session)
     assert second.json()["outcome"] == "already_processed"
     assert (
         db_session.query(ProcessedEvent)
-        .filter(ProcessedEvent.event_id == "dograh:2001")
+        .filter(ProcessedEvent.event_id == "dograh:99")
         .count()
         == 1
     )

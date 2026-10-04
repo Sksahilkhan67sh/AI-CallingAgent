@@ -31,34 +31,39 @@ def _webhook_rate_limit():
     )
 
 
-def _verify_secret(authorization: str | None, x_api_key: str | None) -> None:
+def _verify_secret(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> None:
     """Dograh's Webhook node supports BEARER_TOKEN or API_KEY auth on
     the outgoing request (its own docs) -- either is accepted here so
     the person configuring the workflow can pick whichever fits their
     Dograh credential store."""
-    expected = get_settings().dograh_webhook_secret
+    # CP10: declared as a route dependency so it runs BEFORE the body is
+    # validated (an unauthenticated caller must not get schema feedback or
+    # reach any processing), and compared as bytes so a non-ASCII credential
+    # is a clean 401 rather than a TypeError/500.
+    expected = get_settings().dograh_webhook_secret.encode()
     bearer_token = None
     if authorization and authorization.lower().startswith("bearer "):
         bearer_token = authorization.split(" ", 1)[1].strip()
 
-    if bearer_token and secrets.compare_digest(bearer_token, expected):
+    if bearer_token and secrets.compare_digest(bearer_token.encode(), expected):
         return
-    if x_api_key and secrets.compare_digest(x_api_key, expected):
+    if x_api_key and secrets.compare_digest(x_api_key.encode(), expected):
         return
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Dograh webhook credential"
     )
 
 
-@router.post("/call-completed", dependencies=[Depends(_webhook_rate_limit())])
+@router.post(
+    "/call-completed", dependencies=[Depends(_webhook_rate_limit()), Depends(_verify_secret)]
+)
 def dograh_call_completed(
     payload: DograhWebhookPayload,
     db: Session = Depends(get_db),
-    authorization: str | None = Header(default=None),
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
-    _verify_secret(authorization, x_api_key)
-
     try:
         result = process_dograh_webhook(db, payload)
     except DograhWebhookError as exc:
