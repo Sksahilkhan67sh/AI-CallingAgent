@@ -40,19 +40,23 @@ class AdminPrincipal:
 _ALGORITHM = "HS256"
 
 
+def _matches(supplied: str, expected: str) -> bool:
+    # Compared as UTF-8 bytes: secrets.compare_digest raises TypeError (-> HTTP 500)
+    # for a non-ASCII `str`, and a Hindi/emoji credential is just a wrong one.
+    return secrets.compare_digest(supplied.encode(), expected.encode())
+
+
 def authenticate(username: str, password: str) -> AdminPrincipal:
     """Constant-time comparison against the two configured identities --
     same approach the existing telephony webhook secret check already
     uses (`x_webhook_secret != settings.telephony_webhook_secret`)."""
     settings = get_settings()
 
-    if secrets.compare_digest(username, settings.admin_username) and (
-        secrets.compare_digest(password, settings.admin_password)
-    ):
+    if _matches(username, settings.admin_username) and _matches(password, settings.admin_password):
         return AdminPrincipal(username=username, role="admin")
 
-    if secrets.compare_digest(username, settings.operator_username) and (
-        secrets.compare_digest(password, settings.operator_password)
+    if _matches(username, settings.operator_username) and _matches(
+        password, settings.operator_password
     ):
         return AdminPrincipal(username=username, role="operator")
 

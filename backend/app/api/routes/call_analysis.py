@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api.admin_deps import require_admin
+from app.api.route_limits import ANALYSIS_LIMIT
 from app.core.database import get_db
 from app.core.errors import NotFoundError
 from app.models.call_analysis import CallAnalysis
@@ -20,10 +22,15 @@ from app.schemas.pagination import Page
 
 router = APIRouter(prefix="/api/v1", tags=["Call Analysis"])
 
+# CP11 authorization matrix: every route requires a valid token. Reads are open to
+# any authenticated role; mutations (and enqueue/import) are admin-only.
+_ANY_ROLE = [Depends(require_admin)]
+
 
 @router.get(
     "/call-attempts/{call_attempt_id}/analysis",
     response_model=CallAnalysisResponse,
+    dependencies=[*_ANY_ROLE, ANALYSIS_LIMIT],
 )
 def get_analysis_by_call_attempt(
     call_attempt_id: uuid.UUID, db: Session = Depends(get_db)
@@ -41,6 +48,7 @@ def get_analysis_by_call_attempt(
 @router.get(
     "/contacts/{contact_id}/analysis",
     response_model=CallAnalysisResponse,
+    dependencies=[*_ANY_ROLE, ANALYSIS_LIMIT],
 )
 def get_latest_analysis_by_contact(
     contact_id: uuid.UUID, db: Session = Depends(get_db)
@@ -63,6 +71,7 @@ def get_latest_analysis_by_contact(
 @router.get(
     "/campaigns/{campaign_id}/analysis",
     response_model=Page[CallAnalysisResponse],
+    dependencies=[*_ANY_ROLE, ANALYSIS_LIMIT],
 )
 def list_analysis_by_campaign(
     campaign_id: uuid.UUID,

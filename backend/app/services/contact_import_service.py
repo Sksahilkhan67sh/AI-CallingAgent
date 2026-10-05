@@ -34,8 +34,9 @@ _ACTOR = "api-client"
 
 
 class ContactImportService:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, actor: str = _ACTOR) -> None:
         self.db = db
+        self.actor = actor
         self.campaigns = CampaignRepository(db)
 
     def import_csv(self, campaign_name: str, csv_bytes: bytes) -> BulkContactImportResult:
@@ -99,7 +100,7 @@ class ContactImportService:
 
         record_audit_event(
             self.db,
-            actor=_ACTOR,
+            actor=self.actor,
             action="campaign.bulk_import_completed",
             entity_type="campaign",
             entity_id=campaign.id,
@@ -117,7 +118,11 @@ class ContactImportService:
 
     @staticmethod
     def _read_rows(csv_bytes: bytes) -> Iterable[tuple[int, str]]:
-        text_stream = io.StringIO(csv_bytes.decode("utf-8-sig"))
+        try:
+            text = csv_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValidationError("CSV file must be UTF-8 encoded") from exc
+        text_stream = io.StringIO(text)
         reader = csv.DictReader(text_stream)
         if reader.fieldnames is None or "phone_number" not in reader.fieldnames:
             raise ValidationError("CSV file must have a 'phone_number' column")

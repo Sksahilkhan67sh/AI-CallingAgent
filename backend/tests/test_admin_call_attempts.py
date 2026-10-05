@@ -74,8 +74,8 @@ def _full_call(db_session, *, phone="555-800-0001"):
     return campaign, contact, attempt
 
 
-def test_list_requires_auth(client):
-    response = client.get("/api/v1/admin/call-attempts")
+def test_list_requires_auth(anon_client):
+    response = anon_client.get("/api/v1/admin/call-attempts")
     assert response.status_code == 401
 
 

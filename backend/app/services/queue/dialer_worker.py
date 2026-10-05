@@ -30,6 +30,7 @@ from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
+from app.services import kill_switch
 from app.services.audit_service import record_audit_event
 from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
@@ -72,11 +73,27 @@ class JobOutcome:
     RECONCILED = "reconciled_existing_run"
     # More than one run exists for one attempt: never pick one, never retry.
     RECONCILE_MULTIPLE = "reconcile_multiple_candidates"
+    # CP11: global kill switch is on (or unreadable -> fail closed). Left UNACKED so
+    # the job stays queued and is re-driven once outbound is re-enabled.
+    OUTBOUND_BLOCKED = "outbound_blocked"
     # The pre-retry lookup could not establish whether the earlier ambiguous
     # trigger created a call. Fail closed: no dial, left UNACKED so a
     # redelivery re-checks instead of dialing blind.
     RECONCILE_DEFERRED = "reconcile_deferred"
     NO_JOB = "no_job"
+
+
+_BLOCKED_POLL_LOG_INTERVAL_SECONDS = 60.0
+_last_blocked_poll_log = 0.0
+
+
+def _log_blocked_poll(reason: str) -> None:
+    """One warning per minute per process while outbound is blocked (not one per poll)."""
+    global _last_blocked_poll_log
+    now = time.monotonic()
+    if now - _last_blocked_poll_log >= _BLOCKED_POLL_LOG_INTERVAL_SECONDS:
+        _last_blocked_poll_log = now
+        logger.warning("outbound_blocked_not_reading_queue", extra={"reason": reason})
 
 
 def process_one_job(
@@ -89,6 +106,17 @@ def process_one_job(
     consumer_name: str,
     block_ms: int = 1000,
 ) -> str:
+    # CP11 kill switch, stage 0: do not even READ a job while outbound is blocked.
+    # A job that is read but not processed sits in the consumer group's pending list, and
+    # that list is only re-driven 10 jobs per ~50 loop iterations (queue.reclaim_stale).
+    # Pulling a whole backlog into it during a freeze would turn "resume" into a crawl.
+    # Unread jobs stay in the stream and are consumed at full speed once it is off.
+    # Stages 1 and 2 below remain the safety net for a switch flipped after the read.
+    if (reason := kill_switch.block_reason()) is not None:
+        _log_blocked_poll(reason)
+        time.sleep(block_ms / 1000)  # same pacing as an empty blocking read: no hot loop
+        return JobOutcome.OUTBOUND_BLOCKED
+
     read = queue.read_one(consumer_name, block_ms)
     if read is None:
         return JobOutcome.NO_JOB
@@ -97,7 +125,9 @@ def process_one_job(
     return process_claimed_job(db, queue, admission, provider, circuit_breaker, message_id, job)
 
 
-_LEFT_UNACKED = frozenset({JobOutcome.IN_FLIGHT, JobOutcome.RECONCILE_DEFERRED})
+_LEFT_UNACKED = frozenset(
+    {JobOutcome.IN_FLIGHT, JobOutcome.RECONCILE_DEFERRED, JobOutcome.OUTBOUND_BLOCKED}
+)
 
 
 def process_claimed_job(
@@ -133,6 +163,15 @@ def process_claimed_job(
     # the native provider's concurrency/CPS/circuit-breaker buckets --
     # they are different external dependencies with independent health.
     provider_name = "dograh" if get_settings().calling_engine == "dograh" else provider.name
+
+    # CP11 kill switch, stage 1: checked before admission so a blocked job never
+    # consumes a concurrency/CPS slot. Stage 2 (the one that matters) is in _dial.
+    if (reason := kill_switch.block_reason()) is not None:
+        logger.warning(
+            "outbound_blocked",
+            extra={"job_id": job.job_id, "trace_id": job.trace_id, "reason": reason},
+        )
+        return JobOutcome.OUTBOUND_BLOCKED  # left unacked on purpose: job stays queued
 
     admitted = False
     for _ in range(_ADMISSION_RETRY_ATTEMPTS):
@@ -222,6 +261,20 @@ def _dial(
         blocked = _second_reconciliation_gate(db, attempts, contact, job)
         if blocked is not None:
             return blocked
+
+    # CP11 kill switch, stage 2 -- the final admission check. Everything that can
+    # place a call (first dial, queued backlog, retries and recovery re-enqueues all
+    # arrive as DialJobs) passes through here, and it sits BEFORE the durable attempt
+    # claim so a blocked job leaves no half-claimed attempt for reconciliation to
+    # misread. Residual race: a switch flipped after this read but before the HTTP
+    # trigger below still lets that one in-flight trigger through -- the check and the
+    # external call cannot be atomic. The window is one DB commit plus one HTTP request.
+    if (reason := kill_switch.block_reason()) is not None:
+        logger.warning(
+            "outbound_blocked",
+            extra={"job_id": job.job_id, "trace_id": job.trace_id, "reason": reason},
+        )
+        return JobOutcome.OUTBOUND_BLOCKED
 
     attempt, created = attempts.get_or_create(contact.id, job.attempt_number)
 

@@ -43,8 +43,8 @@ def test_login_with_unknown_username_is_rejected(client):
     assert response.status_code == 401
 
 
-def test_dashboard_overview_requires_authentication(client):
-    response = client.get("/api/v1/admin/dashboard/overview")
+def test_dashboard_overview_requires_authentication(anon_client):
+    response = anon_client.get("/api/v1/admin/dashboard/overview")
     assert response.status_code == 401
 
 

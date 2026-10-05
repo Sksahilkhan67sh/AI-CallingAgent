@@ -141,6 +141,6 @@ def test_contact_without_suppression_shows_false(client, db_session):
     assert response.json()["suppressed"] is False
 
 
-def test_contacts_and_campaigns_require_auth(client):
-    assert client.get("/api/v1/admin/campaigns").status_code == 401
-    assert client.get("/api/v1/admin/contacts").status_code == 401
+def test_contacts_and_campaigns_require_auth(anon_client):
+    assert anon_client.get("/api/v1/admin/campaigns").status_code == 401
+    assert anon_client.get("/api/v1/admin/contacts").status_code == 401

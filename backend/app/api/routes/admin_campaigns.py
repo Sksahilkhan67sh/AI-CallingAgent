@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
+from app.api.route_limits import MUTATION_LIMIT
 from app.core.database import get_db
 from app.models.enums import CampaignStatus
 from app.schemas.admin import CampaignDetail, CampaignListItem
@@ -45,16 +46,20 @@ def get_admin_campaign(
     return get_campaign_detail(db, campaign_id)
 
 
-@router.post("/{campaign_id}/status", response_model=CampaignResponse)
+@router.post(
+    "/{campaign_id}/status",
+    response_model=CampaignResponse,
+    dependencies=[MUTATION_LIMIT],
+)
 def transition_campaign_status(
     campaign_id: uuid.UUID,
     new_status: CampaignStatus,
     db: Session = Depends(get_db),
-    _principal: AdminPrincipal = Depends(require_role("admin")),
+    principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> CampaignResponse:
     """§5: operational controls (activate/pause/resume/complete) require
     the `admin` role, unlike the read-only monitoring endpoints above."""
-    campaign = CampaignService(db).update_campaign(
+    campaign = CampaignService(db, actor=principal.username).update_campaign(
         campaign_id, CampaignUpdate(status=new_status)
     )
     return CampaignResponse.model_validate(campaign)

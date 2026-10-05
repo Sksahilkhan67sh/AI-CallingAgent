@@ -19,3 +19,12 @@ class ValidationError(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
         super().__init__(message)
+
+
+class ServiceUnavailableError(Exception):
+    """A required dependency (e.g. Redis) is unavailable and the operation is
+    one that must fail closed. Mapped to HTTP 503 without internal detail."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
