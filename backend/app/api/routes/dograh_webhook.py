@@ -8,13 +8,14 @@ ends.
 
 import secrets
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.rate_limit import rate_limit_dependency
 from app.schemas.dograh_webhook import DograhWebhookPayload
+from app.services.security_audit import record_security_event
 from app.services.telephony.dograh_webhook_service import (
     DograhWebhookError,
     process_dograh_webhook,
@@ -25,15 +26,17 @@ router = APIRouter(prefix="/api/v1/webhooks/dograh", tags=["Dograh Webhook"])
 
 def _webhook_rate_limit():
     return rate_limit_dependency(
-        limit=get_settings().webhook_rate_limit_per_minute,
+        limit=lambda: get_settings().webhook_rate_limit_per_minute,
         window_seconds=60,
         key_prefix="dograh_webhook",
     )
 
 
 def _verify_secret(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    db: Session = Depends(get_db),
 ) -> None:
     """Dograh's Webhook node supports BEARER_TOKEN or API_KEY auth on
     the outgoing request (its own docs) -- either is accepted here so
@@ -52,6 +55,21 @@ def _verify_secret(
         return
     if x_api_key and secrets.compare_digest(x_api_key.encode(), expected):
         return
+    source_ip = request.client.host if request.client else "unknown"
+    record_security_event(
+        db,
+        action="webhook.auth_failed",
+        actor="anonymous",
+        entity_type="webhook",
+        metadata={
+            "endpoint": "dograh",
+            # whether a credential was presented -- never the credential itself
+            "credential_presented": bool(bearer_token or x_api_key),
+            "source_ip": source_ip,
+        },
+        throttle_key=f"dograh:{source_ip}",
+        commit=True,
+    )
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Dograh webhook credential"
     )
@@ -69,4 +87,14 @@ def dograh_call_completed(
     except DograhWebhookError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    if result.outcome == "already_processed":
+        # Authenticated duplicate/replay: a no-op for the call, but worth a trace.
+        record_security_event(
+            db,
+            action="webhook.duplicate",
+            actor="dograh",
+            entity_type="call_attempt",
+            entity_id=result.call_attempt_id,
+            metadata={"endpoint": "dograh"},
+        )
     return {"call_attempt_id": str(result.call_attempt_id), "outcome": result.outcome}

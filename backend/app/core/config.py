@@ -23,6 +23,13 @@ _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
 _CALLING_ENGINES = frozenset({"native", "dograh"})
 _DOGRAH_TRIGGER_MODES = frozenset({"test", "production"})
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+# CP11 production secret policy. Lengths are deliberately modest floors, not a
+# strength meter: a 32-char token / 12-char password a human cannot guess, and a
+# crude distinct-character floor that rejects "aaaa...". Generate real ones with
+# `openssl rand -base64 48`.
+_MIN_SECRET_LENGTH = 32
+_MIN_DISTINCT_SECRET_CHARS = 8
+_MIN_PASSWORD_LENGTH = 12
 
 
 class Settings(BaseSettings):
@@ -30,6 +37,11 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # CP11: a failed validation (e.g. refusing to boot on a weak production secret)
+        # must not print the raw input. Pydantic otherwise appends a truncated dump of
+        # every setting -- REDIS_URL / PRIMARY_DB_URL credentials and secrets included --
+        # to the startup error, which is exactly what ends up in shipped logs.
+        hide_input_in_errors=True,
     )
 
     # --- Service metadata ---
@@ -139,6 +151,30 @@ class Settings(BaseSettings):
 
     # --- Rate limiting (Checkpoint 09 §8.5) ---
     login_rate_limit_per_minute: int = 10
+    # CP11: per-principal budgets for authenticated operations, requests/minute.
+    # Enqueue and import are the expensive ones (a single enqueue walks up to 100K
+    # contacts; an import parses a 5 MB CSV) so they are far tighter than ordinary
+    # mutations / analysis reads.
+    enqueue_rate_limit_per_minute: int = 5
+    import_rate_limit_per_minute: int = 5
+    mutation_rate_limit_per_minute: int = 120
+    analysis_rate_limit_per_minute: int = 120
+
+    # CP11: request body caps (bytes), enforced before any parsing/auth work.
+    max_request_body_bytes: int = 1_048_576  # 1 MiB: every JSON API, login, webhooks
+    max_import_body_bytes: int = 6_291_456  # 6 MiB: CSV import (5 MiB file + multipart overhead)
+
+    # CP11: static backstop for the global outbound kill switch. If true, no new
+    # outbound call is admitted regardless of Redis state (survives a Redis flush
+    # or restart). Changing it needs a process restart -- the runtime switch is
+    # POST/DELETE /api/v1/admin/kill-switch.
+    outbound_kill_switch: bool = False
+
+    # CP11: hard cap on a fetched transcript body (decoded bytes) and on how many
+    # lines of it are stored. The URL is supplied by the webhook body, so the
+    # response size is attacker-influenced.
+    dograh_transcript_max_bytes: int = 2_000_000
+    dograh_transcript_max_lines: int = 5_000
     webhook_rate_limit_per_minute: int = 120
 
     # --- Post-call intelligence (Checkpoint 06) ---
@@ -180,6 +216,20 @@ class Settings(BaseSettings):
                 "DOGRAH_CONNECT_TIMEOUT_SECONDS and DOGRAH_READ_TIMEOUT_SECONDS must be > 0"
             )
 
+        # CP11: a zero/negative cap would make a safety limit reject (or divide) everything.
+        for name in (
+            "enqueue_rate_limit_per_minute",
+            "import_rate_limit_per_minute",
+            "mutation_rate_limit_per_minute",
+            "analysis_rate_limit_per_minute",
+            "max_request_body_bytes",
+            "max_import_body_bytes",
+            "dograh_transcript_max_bytes",
+            "dograh_transcript_max_lines",
+        ):
+            if getattr(self, name) <= 0:
+                problems.append(f"{name.upper()} must be > 0")
+
         if self.calling_engine == "dograh":
             parsed = urlparse(self.dograh_api_base_url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -203,17 +253,20 @@ class Settings(BaseSettings):
             )
         return self
 
-    # --- Production config validation (Checkpoint 09 §10) ---
-    # "Do not silently use development defaults in production." Every
-    # value checked here is a dev-only-insecure default that already
-    # exists elsewhere in this file (jwt_signing_key, the admin/operator
-    # passwords, telephony_webhook_secret, dograh_webhook_secret) --
-    # this validator doesn't invent new secrets, it just refuses to
-    # boot with the known-insecure ones once environment="production".
+    # --- Production config validation (Checkpoint 09 §10, hardened in CP11) ---
+    # "Do not silently use development defaults in production." Fails closed: the
+    # process refuses to boot rather than substitute a default. Error messages name
+    # the offending FIELD only -- never a secret value.
+    #
+    # * staging AND production: no dev-only default secret. A shared, network-reachable
+    #   staging box running the published default JWT key lets anyone forge admin tokens.
+    # * production only: minimum secret strength, all secrets distinct, distinct
+    #   admin/operator identities, no wildcard CORS, real (non-mock) engine.
     @model_validator(mode="after")
     def _validate_production_config(self) -> "Settings":
-        if self.environment != "production":
+        if self.environment not in ("staging", "production"):
             return self
+        production = self.environment == "production"
 
         problems: list[str] = []
 
@@ -228,31 +281,81 @@ class Settings(BaseSettings):
             if getattr(self, field_name) == insecure_default:
                 problems.append(f"{field_name.upper()} is still set to its dev-only default")
 
-        # CP10: every native provider is still a mock, so production on the
-        # native engine would "place" fake calls. Never a silent fallback.
-        if self.calling_engine != "dograh":
-            problems.append(
-                "CALLING_ENGINE must be 'dograh' when ENVIRONMENT=production "
-                "(the native engine only has mock providers)"
-            )
+        if production:
+            self._check_production_secrets(problems)
 
-        if self.calling_engine == "dograh":
-            if not self.dograh_api_key:
-                problems.append("DOGRAH_API_KEY is required when CALLING_ENGINE=dograh")
-            if not self.dograh_trigger_uuid:
-                problems.append("DOGRAH_TRIGGER_UUID is required when CALLING_ENGINE=dograh")
-            if self.dograh_trigger_mode != "production":
+            if self.admin_username.strip() == "" or self.operator_username.strip() == "":
+                problems.append("ADMIN_USERNAME and OPERATOR_USERNAME must not be empty")
+            elif self.admin_username == self.operator_username:
                 problems.append(
-                    "DOGRAH_TRIGGER_MODE must be 'production' (not 'test') when "
-                    "ENVIRONMENT=production -- see docs/CHECKPOINT-09-NOTES.md §1.1"
+                    "ADMIN_USERNAME and OPERATOR_USERNAME must differ "
+                    "(audit events and rate limits are attributed by username)"
                 )
+
+            if any(origin.strip() == "*" for origin in self.admin_cors_origins):
+                problems.append("ADMIN_CORS_ORIGINS must list explicit origins, not '*'")
+
+            # CP10: every native provider is still a mock, so production on the
+            # native engine would "place" fake calls. Never a silent fallback.
+            if self.calling_engine != "dograh":
+                problems.append(
+                    "CALLING_ENGINE must be 'dograh' when ENVIRONMENT=production "
+                    "(the native engine only has mock providers)"
+                )
+
+            if self.calling_engine == "dograh":
+                if not self.dograh_api_key:
+                    problems.append("DOGRAH_API_KEY is required when CALLING_ENGINE=dograh")
+                if not self.dograh_trigger_uuid:
+                    problems.append("DOGRAH_TRIGGER_UUID is required when CALLING_ENGINE=dograh")
+                if self.dograh_trigger_mode != "production":
+                    problems.append(
+                        "DOGRAH_TRIGGER_MODE must be 'production' (not 'test') when "
+                        "ENVIRONMENT=production -- see docs/CHECKPOINT-09-NOTES.md §1.1"
+                    )
 
         if problems:
             raise ValueError(
-                "Refusing to start with ENVIRONMENT=production and insecure/incomplete "
+                f"Refusing to start with ENVIRONMENT={self.environment} and insecure/incomplete "
                 "configuration:\n  - " + "\n  - ".join(problems)
             )
         return self
+
+    def _check_production_secrets(self, problems: list[str]) -> None:
+        machine_secrets = {
+            "jwt_signing_key": self.jwt_signing_key,
+            "telephony_webhook_secret": self.telephony_webhook_secret,
+            "dograh_webhook_secret": self.dograh_webhook_secret,
+        }
+        passwords = {
+            "admin_password": self.admin_password,
+            "operator_password": self.operator_password,
+        }
+        for name, value in machine_secrets.items():
+            if len(value) < _MIN_SECRET_LENGTH:
+                problems.append(f"{name.upper()} must be at least {_MIN_SECRET_LENGTH} characters")
+            elif len(set(value)) < _MIN_DISTINCT_SECRET_CHARS:
+                problems.append(f"{name.upper()} is too repetitive to be a real secret")
+        for name, value in passwords.items():
+            if len(value) < _MIN_PASSWORD_LENGTH:
+                problems.append(
+                    f"{name.upper()} must be at least {_MIN_PASSWORD_LENGTH} characters"
+                )
+        for name, value in {**machine_secrets, **passwords}.items():
+            if value != value.strip():
+                problems.append(f"{name.upper()} must not start or end with whitespace")
+
+        # One leaked secret must not unlock another: all must differ from each other
+        # (and the Dograh API key, which is also shared with a third party).
+        named = {**machine_secrets, **passwords}
+        if self.dograh_api_key:
+            named["dograh_api_key"] = self.dograh_api_key
+        seen: dict[str, str] = {}
+        for name, value in named.items():
+            if value in seen:
+                problems.append(f"{name.upper()} must differ from {seen[value].upper()}")
+            else:
+                seen[value] = name
 
 
 @lru_cache

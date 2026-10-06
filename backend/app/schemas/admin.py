@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     AnalysisIntent,
@@ -21,8 +21,9 @@ from app.models.enums import (
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    # Bounded so an unauthenticated caller cannot post megabyte credentials.
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=256)
 
 
 class LoginResponse(BaseModel):
