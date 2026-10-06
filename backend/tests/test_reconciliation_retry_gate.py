@@ -309,8 +309,17 @@ def test_7_8_concurrent_workers_on_one_retry_trigger_exactly_once(
     assert not [o for o in outcomes if str(o).startswith("ERR")], outcomes
     assert fake.calls == 2  # the original + EXACTLY ONE retry, however many workers
     assert [a.attempt_number for a in _attempts(sc.contact_id)] == [1, 2]
-    assert _pending(sc.queue) == 0
     assert outcomes.count(JobOutcome.ADMITTED_AND_DIALED) == 1
+
+    # CP12-A: one logical attempt holds ONE concurrency lease, so a duplicate delivery that
+    # arrives while the winner is in flight is not admitted. It is left unacked (never lost
+    # and never a second dial) and the normal stale-reclaim pass resolves it without any
+    # further trigger. Before CP12-A every duplicate took its own slot and was acked at once.
+    assert _pending(sc.queue) == outcomes.count(JobOutcome.NOT_ADMITTED)
+    for reclaimed in sc.queue.reclaim_stale("drain", idle_ms=0):
+        assert _process(sc, redis_client, provider, reclaimed) == JobOutcome.ALREADY_PROCESSED
+    assert _pending(sc.queue) == 0
+    assert fake.calls == 2
 
 
 @pytest.mark.parametrize("n", [2, 8])
