@@ -29,8 +29,9 @@ _ALLOWED_TRANSITIONS: dict[CampaignStatus, set[CampaignStatus]] = {
 
 
 class CampaignService:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, actor: str = _ACTOR) -> None:
         self.db = db
+        self.actor = actor
         self.campaigns = CampaignRepository(db)
 
     def create_campaign(self, data: CampaignCreate) -> Campaign:
@@ -38,7 +39,7 @@ class CampaignService:
         campaign = self.campaigns.add(campaign)
         record_audit_event(
             self.db,
-            actor=_ACTOR,
+            actor=self.actor,
             action="campaign.created",
             entity_type="campaign",
             entity_id=campaign.id,
@@ -63,7 +64,7 @@ class CampaignService:
             campaign.name = data.name
             record_audit_event(
                 self.db,
-                actor=_ACTOR,
+                actor=self.actor,
                 action="campaign.updated",
                 entity_type="campaign",
                 entity_id=campaign.id,
@@ -87,7 +88,7 @@ class CampaignService:
         campaign.status = new_status
         record_audit_event(
             self.db,
-            actor=_ACTOR,
+            actor=self.actor,
             action="campaign.status_changed",
             entity_type="campaign",
             entity_id=campaign.id,

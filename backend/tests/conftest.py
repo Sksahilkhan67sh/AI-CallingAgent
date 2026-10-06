@@ -74,8 +74,28 @@ def client(db_session: Session) -> TestClient:
     # streams written incidentally through the app) leaks across tests
     # that only use `client`, not `redis_client` directly.
     redis_lib.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True).flushdb()
-    yield TestClient(app)
+    # CP11: the /api/v1 campaign/contact/analysis routes require a token. `client`
+    # carries an admin token so the pre-CP11 functional tests keep exercising
+    # behaviour; `anon_client` / `operator_client` exist for the security tests.
+    yield TestClient(app, headers=_bearer("admin"))
     app.dependency_overrides.clear()
+
+
+def _bearer(role: str) -> dict[str, str]:
+    from app.services.admin.auth import AdminPrincipal, create_access_token
+
+    token, _ = create_access_token(AdminPrincipal(username=f"test-{role}", role=role))
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def anon_client(client: TestClient) -> TestClient:
+    return TestClient(app)
+
+
+@pytest.fixture
+def operator_client(client: TestClient) -> TestClient:
+    return TestClient(app, headers=_bearer("operator"))
 
 
 @pytest.fixture

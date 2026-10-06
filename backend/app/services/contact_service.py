@@ -28,8 +28,9 @@ _ACTOR = "api-client"
 
 
 class ContactService:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, actor: str = _ACTOR) -> None:
         self.db = db
+        self.actor = actor
         self.contacts = ContactRepository(db)
         self.campaigns = CampaignRepository(db)
         self.suppressions = SuppressionRepository(db)
@@ -63,7 +64,7 @@ class ContactService:
         contact = self.contacts.add(contact)
         record_audit_event(
             self.db,
-            actor=_ACTOR,
+            actor=self.actor,
             action="contact.created",
             entity_type="contact",
             entity_id=contact.id,
@@ -112,7 +113,7 @@ class ContactService:
         if changed:
             record_audit_event(
                 self.db,
-                actor=_ACTOR,
+                actor=self.actor,
                 action="contact.updated",
                 entity_type="contact",
                 entity_id=contact.id,
@@ -128,7 +129,7 @@ class ContactService:
         self.db.flush()
         record_audit_event(
             self.db,
-            actor=_ACTOR,
+            actor=self.actor,
             action="contact.deactivated",
             entity_type="contact",
             entity_id=contact.id,

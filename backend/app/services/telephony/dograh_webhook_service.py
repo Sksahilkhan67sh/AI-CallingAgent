@@ -21,20 +21,15 @@ dropped mid-call / ended normally), not the two-way split Checkpoint
 08 shipped with.
 """
 
-import ipaddress
 import logging
 import re
-import socket
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -57,6 +52,7 @@ from app.services.telephony.dograh_reconciliation import (
     is_unresolved_ambiguous_trigger,
     reopen_for_adoption,
 )
+from app.services.telephony.transcript_fetch import fetch_transcript_lines, resolve_target
 
 logger = logging.getLogger("dograh_webhook")
 
@@ -214,60 +210,8 @@ def _already_processed(payload: DograhWebhookPayload) -> "DograhWebhookResult":
 
 
 def _is_safe_transcript_url(url: str) -> bool:
-    """CP10 SSRF guard: `transcript_url` comes from the webhook body, so it is
-    fetched only if no resolved address is loopback, link-local (cloud
-    metadata), unspecified, multicast or reserved, and a private-network
-    address is fetched only when the host is Dograh's own configured host or
-    one the operator listed in DOGRAH_TRANSCRIPT_EXTRA_HOSTS. Redirects are
-    never followed. Residual risk: DNS rebinding between this check and the
-    fetch (documented in docs/CHECKPOINT-10-NOTES.md)."""
-    settings = get_settings()
-    host = urlparse(url).hostname
-    if not host:
-        return False
-    trusted_hosts = {
-        urlparse(settings.dograh_api_base_url).hostname,
-        *settings.dograh_transcript_extra_hosts,
-    }
-    try:
-        addresses = {info[4][0] for info in socket.getaddrinfo(host, None)}
-    except OSError:
-        return False
-    for address in addresses:
-        ip = ipaddress.ip_address(address.split("%")[0])
-        if (
-            ip.is_loopback
-            or ip.is_link_local
-            or ip.is_unspecified
-            or ip.is_multicast
-            or ip.is_reserved
-        ):
-            return False
-        if ip.is_private and host not in trusted_hosts:
-            return False
-    return True
-
-
-def _fetch_transcript_lines(transcript_url: str) -> list[dict]:
-    """Best-effort only -- Dograh's transcript export format isn't
-    fixed in its published docs (transcript_url is just "a public
-    download URL"). Never raises: a fetch/parse failure here must not
-    fail webhook processing -- the call's terminal-state transition is
-    the important, durable part."""
-    if not _is_safe_transcript_url(transcript_url):
-        logger.warning("dograh_transcript_url_blocked")
-        return []
-    try:
-        response = httpx.get(transcript_url, timeout=15.0, follow_redirects=False)
-        response.raise_for_status()
-        data = response.json()
-    except Exception:
-        logger.warning("dograh_transcript_fetch_failed")
-        return []
-
-    if not isinstance(data, list):
-        return []
-    return [item for item in data if isinstance(item, dict)]
+    """CP10 SSRF guard, hardened in CP11 -- see transcript_fetch.py."""
+    return resolve_target(url) is not None
 
 
 def _role_for(raw_role: str) -> ConversationRole:
@@ -284,7 +228,7 @@ def _populate_transcript(
 ) -> None:
     if not transcript_url:
         return
-    lines = _fetch_transcript_lines(transcript_url)
+    lines = fetch_transcript_lines(transcript_url)
     for i, line in enumerate(lines, start=1):
         raw_role = str(line.get("role") or line.get("speaker") or "")
         content = str(

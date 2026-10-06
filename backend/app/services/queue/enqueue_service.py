@@ -14,12 +14,14 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
+from app.core.request_context import current_request_id
 from app.models.enums import CampaignStatus, ContactStatus
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
 from app.schemas.queue import EnqueueResult
+from app.services import kill_switch
 from app.services.audit_service import record_audit_event
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
@@ -37,8 +39,9 @@ _ACTOR = "api-client"
 
 
 class QueueEnqueueService:
-    def __init__(self, db: Session, queue: RedisStreamQueue) -> None:
+    def __init__(self, db: Session, queue: RedisStreamQueue, actor: str = _ACTOR) -> None:
         self.db = db
+        self.actor = actor
         self.queue = queue
         self.campaigns = CampaignRepository(db)
         self.contacts = ContactRepository(db)
@@ -52,6 +55,25 @@ class QueueEnqueueService:
             raise ValidationError(
                 f"Campaign is {campaign.status.value}, not active -- cannot enqueue"
             )
+        # CP11: no new outbound work while the global kill switch is on, and an
+        # unreadable switch is treated as on (fail closed -> 503, not a silent 500).
+        # Jobs already queued are untouched; the dial worker gates them again.
+        blocked = kill_switch.block_reason()
+        if blocked == kill_switch.UNAVAILABLE:
+            raise ServiceUnavailableError("Outbound control state is unavailable")
+        if blocked is not None:
+            # Committed before raising: get_db rolls back on an exception, which would
+            # otherwise discard this row.
+            record_audit_event(
+                self.db,
+                actor=self.actor,
+                action="campaign.enqueue_blocked",
+                entity_type="campaign",
+                entity_id=campaign_id,
+                metadata={"reason": blocked, "request_id": current_request_id()},
+            )
+            self.db.commit()
+            raise ConflictError("Outbound calling is disabled by the global kill switch")
 
         enqueued = 0
         skipped_suppressed = 0
@@ -99,7 +121,7 @@ class QueueEnqueueService:
 
         record_audit_event(
             self.db,
-            actor=_ACTOR,
+            actor=self.actor,
             action="campaign.enqueued",
             entity_type="campaign",
             entity_id=campaign.id,

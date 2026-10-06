@@ -8,11 +8,11 @@ from pydantic import ValidationError
 from app.core.config import Settings, get_settings
 
 _PROD_SECRETS = dict(
-    jwt_signing_key="k" * 32,
-    admin_password="a-real-admin-pw",
-    operator_password="a-real-operator-pw",
-    telephony_webhook_secret="s-telephony",
-    dograh_webhook_secret="s-dograh",
+    jwt_signing_key="Jx7Qp2mV9rT4wZc8LdN3sH6yB1fKaE5uGo0iXvR2",
+    admin_password="a-real-admin-pw-7Hq2",
+    operator_password="a-real-operator-pw-9Zk4",
+    telephony_webhook_secret="tw-Mn8Rb3Vc6Xy1Qs5Ld9Fg2Hj7Kp4Tz0Wa",
+    dograh_webhook_secret="dw-Ue4Yi8Po2As6Df0Gh3Jk7Lz1Xc5Vb9Nm",
 )
 
 
@@ -105,6 +105,7 @@ def test_staging_dograh_requires_credentials_but_may_use_test_mode():
         dograh_api_key="k",
         dograh_trigger_uuid="u",
         dograh_trigger_mode="test",
+        **_PROD_SECRETS,  # CP11: staging no longer boots with the dev-default secrets
     )
     assert ok.dograh_trigger_mode == "test"
 
