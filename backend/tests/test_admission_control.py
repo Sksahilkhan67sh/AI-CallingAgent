@@ -96,7 +96,7 @@ def test_release_frees_the_concurrency_slot(redis_client):
     first = controller.try_admit(campaign_id="c1", provider_name="mock")
     assert first.admitted is True
 
-    controller.release(campaign_id="c1", provider_name="mock")
+    controller.release(first.lease)
 
     second = controller.try_admit(campaign_id="c2", provider_name="mock")
     assert second.admitted is True  # slot was freed
@@ -111,7 +111,7 @@ def test_rejected_admission_rolls_back_partial_reservations(redis_client):
     controller.try_admit(campaign_id="c1", provider_name="mock")  # rejected on CPS
 
     # global concurrency should reflect only the ONE admitted call, not two
-    assert int(redis_client.get("concurrency:global")) == 1
+    assert redis_client.zcard("concurrency:lease:global") == 1
 
 
 def test_backpressure_does_not_flood_when_capacity_is_exhausted(redis_client):

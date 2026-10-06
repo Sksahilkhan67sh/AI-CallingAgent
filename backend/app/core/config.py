@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     global_concurrency_limit: int = 100
     campaign_concurrency_limit: int = 30
     provider_concurrency_limit: int = 100
+    # CP12-A: a concurrency slot is a lease that expires on its own, so a worker killed
+    # mid-dial cannot leak capacity. It must outlast the longest legitimate dial (the
+    # Dograh trigger plus reconciliation lookups, each bounded by the Dograh timeouts
+    # below) -- validated against those timeouts -- yet stay short enough that a dead
+    # worker's slot and its job come back quickly. See docs/CHECKPOINT-12A-NOTES.md.
+    concurrency_lease_ttl_seconds: int = 120
 
     # Circuit breaker (per provider)
     circuit_breaker_error_threshold: int = 5
@@ -214,6 +220,16 @@ class Settings(BaseSettings):
         if self.dograh_connect_timeout_seconds <= 0 or self.dograh_read_timeout_seconds <= 0:
             problems.append(
                 "DOGRAH_CONNECT_TIMEOUT_SECONDS and DOGRAH_READ_TIMEOUT_SECONDS must be > 0"
+            )
+
+        # CP12-A: a lease that can expire while its dial is still running would let a second
+        # worker take the same slot. Three sequential Dograh requests (trigger + two
+        # reconciliation lookups) is the longest path in the dial flow.
+        longest_dial = 3 * (self.dograh_connect_timeout_seconds + self.dograh_read_timeout_seconds)
+        if self.concurrency_lease_ttl_seconds <= longest_dial:
+            problems.append(
+                "CONCURRENCY_LEASE_TTL_SECONDS must exceed 3 x (DOGRAH_CONNECT_TIMEOUT_SECONDS "
+                f"+ DOGRAH_READ_TIMEOUT_SECONDS) = {longest_dial:g}s"
             )
 
         # CP11: a zero/negative cap would make a safety limit reject (or divide) everything.
