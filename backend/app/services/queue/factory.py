@@ -31,4 +31,5 @@ def get_admission_controller() -> AdmissionController:
         global_concurrency_limit=settings.global_concurrency_limit,
         campaign_concurrency_limit=settings.campaign_concurrency_limit,
         provider_concurrency_limit=settings.provider_concurrency_limit,
+        lease_ttl_seconds=settings.concurrency_lease_ttl_seconds,
     )
