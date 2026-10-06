@@ -162,8 +162,12 @@ def test_worker_skips_inactive_campaign(db_session, redis_client, provider):
         db_session, queue, _admission(redis_client), provider, breaker, consumer_name="w1"
     )
 
-    assert outcome == JobOutcome.NOT_ELIGIBLE
+    # CP12-B: a paused campaign is deferred, not "not eligible" (which is acked and dropped).
+    assert outcome == JobOutcome.CAMPAIGN_PAUSED
     assert len(provider._calls) == 0
+    db_session.refresh(contact)  # nothing consumed: the contact is still dialable on resume
+    assert contact.status == ContactStatus.PENDING
+    assert contact.attempt_count == 0
 
 
 def test_worker_skips_closed_contact(db_session, redis_client, provider):

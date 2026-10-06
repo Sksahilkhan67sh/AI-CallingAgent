@@ -24,7 +24,12 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import CallEvent
-from app.models.enums import CallAttemptState, ContactStatus, NeverConnectedFailureReason
+from app.models.enums import (
+    CallAttemptState,
+    CampaignStatus,
+    ContactStatus,
+    NeverConnectedFailureReason,
+)
 from app.models.retry_policy import RetryPolicy
 from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.campaign_repository import CampaignRepository
@@ -34,6 +39,7 @@ from app.services import kill_switch
 from app.services.audit_service import record_audit_event
 from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
+from app.services.queue.enqueue_service import enqueue_guard_key
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.recovery.factory import get_recovery_scheduler
@@ -80,6 +86,15 @@ class JobOutcome:
     # trigger created a call. Fail closed: no dial, left UNACKED so a
     # redelivery re-checks instead of dialing blind.
     RECONCILE_DEFERRED = "reconcile_deferred"
+    # CP12-B: the campaign is paused. The job is NOT lost, NOT counted as handled, and no
+    # concurrency lease / CPS slot was (or stays) taken. Two dispositions, see _settle_paused:
+    #   CAMPAIGN_PAUSED       -- first-attempt job whose logical record is still the Postgres
+    #                            contact row: its Redis reference (and enqueue guard) is dropped
+    #                            (acked) and resume re-queues it once.
+    #   CAMPAIGN_PAUSED_HELD  -- anything else (retries, recovery jobs, attempt claims): left
+    #                            UNACKED in the pending list, re-driven by the normal reclaim.
+    CAMPAIGN_PAUSED = "campaign_paused"
+    CAMPAIGN_PAUSED_HELD = "campaign_paused_held"
     NO_JOB = "no_job"
 
 
@@ -126,8 +141,74 @@ def process_one_job(
 
 
 _LEFT_UNACKED = frozenset(
-    {JobOutcome.IN_FLIGHT, JobOutcome.RECONCILE_DEFERRED, JobOutcome.OUTBOUND_BLOCKED}
+    {
+        JobOutcome.IN_FLIGHT,
+        JobOutcome.RECONCILE_DEFERRED,
+        JobOutcome.OUTBOUND_BLOCKED,
+        JobOutcome.CAMPAIGN_PAUSED_HELD,
+    }
 )
+
+
+def _campaign_is_paused(db: Session, campaign_id: str) -> bool:
+    """The durable campaign state, read fresh from PostgreSQL on every job (CP12-B).
+
+    A column query, deliberately not `db.get(Campaign, ...)`: the identity map could hand back
+    a copy loaded before the operator paused the campaign. Redis never decides this -- a stale
+    or replayed queue entry cannot out-vote the database."""
+    status = db.execute(
+        select(Campaign.status).where(Campaign.id == uuid.UUID(campaign_id))
+    ).scalar_one_or_none()
+    return status == CampaignStatus.PAUSED
+
+
+def _settle_paused(db: Session, queue: RedisStreamQueue, message_id: str, job: DialJob) -> str:
+    """Decide what happens to a job read for a paused campaign. Nothing is dialed and no
+    attempt row, attempt count or retry state is touched, so a paused job can never turn into
+    a failure, a retry or a duplicate. Never sleeps or re-queues: pausing costs one Redis
+    delete + ack per consumed message, and nothing at all for messages that are never read.
+    """
+    contact = db.execute(
+        select(Contact.status, Contact.attempt_count).where(
+            Contact.id == uuid.UUID(job.contact_id)
+        )
+    ).one_or_none()
+    already_dialed = db.execute(
+        select(CallAttempt.provider_call_id).where(
+            CallAttempt.contact_id == uuid.UUID(job.contact_id),
+            CallAttempt.attempt_number == job.attempt_number,
+        )
+    ).scalar_one_or_none()
+
+    # Rebuildable == exactly what QueueEnqueueService selects: PENDING and never attempted.
+    rebuildable = (
+        job.attempt_number == 1
+        and job.recovery_type is None
+        and contact is not None
+        and contact.status == ContactStatus.PENDING
+        and contact.attempt_count == 0
+    )
+    if rebuildable:
+        # Guard first, ack second: a crash in between leaves the message pending (re-driven,
+        # worst case a harmless duplicate reference) rather than a job nobody can rebuild.
+        queue.redis.delete(enqueue_guard_key(job.idempotency_key))
+        queue.ack(message_id)
+        outcome = JobOutcome.CAMPAIGN_PAUSED
+    elif already_dialed is not None:
+        queue.ack(message_id)  # duplicate delivery of a call that was already placed
+        outcome = JobOutcome.ALREADY_PROCESSED
+    else:
+        outcome = JobOutcome.CAMPAIGN_PAUSED_HELD
+    logger.info(
+        "campaign_job_blocked_paused",
+        extra={
+            "job_id": job.job_id,
+            "trace_id": job.trace_id,
+            "campaign_id": job.campaign_id,
+            "disposition": outcome,
+        },
+    )
+    return outcome
 
 
 def process_claimed_job(
@@ -173,6 +254,12 @@ def process_claimed_job(
         )
         return JobOutcome.OUTBOUND_BLOCKED  # left unacked on purpose: job stays queued
 
+    # CP12-B: durable campaign pause, checked before admission so a paused job never takes a
+    # concurrency lease or CPS slot. The same check inside _dial covers a pause that lands
+    # after this read (that path releases the lease it already holds).
+    if _campaign_is_paused(db, job.campaign_id):
+        return _settle_paused(db, queue, message_id, job)
+
     # CP12-A: the concurrency slot is a lease keyed by the job's idempotency key (one logical
     # attempt = one slot; the CallAttempt row does not exist yet at admission). It is released
     # in the `finally` below, and expires on its own if this process dies before reaching it.
@@ -208,6 +295,8 @@ def process_claimed_job(
         raise
     finally:
         admission.release(lease)
+    if outcome == JobOutcome.CAMPAIGN_PAUSED:  # paused after the early check; lease released
+        return _settle_paused(db, queue, message_id, job)
     if outcome not in _LEFT_UNACKED:
         queue.ack(message_id)
     return outcome
@@ -246,6 +335,12 @@ def _dial(
         return JobOutcome.ALREADY_PROCESSED
     if existing is not None and is_dograh:
         return _resolve_unresolved_dograh_claim(db, existing, contact, job)
+
+    # CP12-B: a paused campaign is "not now", never "not eligible" -- NOT_ELIGIBLE is acked,
+    # which used to drop the job. Checked after the idempotency guard above so an already
+    # dialed duplicate still resolves as ALREADY_PROCESSED.
+    if campaign.status == CampaignStatus.PAUSED:
+        return JobOutcome.CAMPAIGN_PAUSED
 
     retry_policy = db.execute(
         select(RetryPolicy).where(RetryPolicy.campaign_id == campaign.id)

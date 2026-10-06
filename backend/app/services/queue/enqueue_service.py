@@ -10,8 +10,10 @@ have never been attempted (attempt_count == 0). Retrying a contact that
 already has an attempt is explicitly a later checkpoint's job (Step 18).
 """
 
+import logging
 import uuid
 
+import redis
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
@@ -36,6 +38,12 @@ MAX_ENQUEUE_PER_REQUEST = 100_000
 _ENQUEUE_GUARD_TTL_SECONDS = 3600
 
 _ACTOR = "api-client"
+
+logger = logging.getLogger("enqueue_service")
+
+
+def enqueue_guard_key(idempotency_key: str) -> str:
+    return f"enqueued:{idempotency_key}"
 
 
 class QueueEnqueueService:
@@ -105,7 +113,7 @@ class QueueEnqueueService:
                     campaign_id=campaign_id, contact_id=contact.id, attempt_number=1
                 )
 
-                guard_key = f"enqueued:{job.idempotency_key}"
+                guard_key = enqueue_guard_key(job.idempotency_key)
                 if not self.queue.redis.set(
                     guard_key, "1", nx=True, ex=_ENQUEUE_GUARD_TTL_SECONDS
                 ):
@@ -138,3 +146,33 @@ class QueueEnqueueService:
             skipped_suppressed=skipped_suppressed,
             skipped_duplicate=skipped_duplicate,
         )
+
+
+def requeue_after_resume(
+    db: Session, queue: RedisStreamQueue, campaign_id: uuid.UUID, *, actor: str
+) -> EnqueueResult | None:
+    """CP12-B: called AFTER a PAUSED -> ACTIVE transition has been committed (never inside
+    its transaction: no DB lock is held across Redis calls).
+
+    While a campaign was paused, workers dropped the Redis reference of every first-attempt
+    job they consumed -- and its enqueue guard -- because Postgres (contact PENDING, no
+    attempt) is the durable record. This re-runs the ordinary idempotent enqueue: contacts
+    that still have a live reference keep their guard and are skipped, so only the dropped
+    ones are queued again, exactly once.
+
+    The resume itself has already succeeded, so a refusal here is not an error of the resume:
+    the global kill switch, a campaign paused again in the meantime, or Redis being down all
+    leave the contacts PENDING and unguarded for the next `POST .../enqueue`."""
+    try:
+        return QueueEnqueueService(db, queue, actor=actor).enqueue_campaign(campaign_id)
+    except (ConflictError, ServiceUnavailableError, ValidationError) as exc:
+        logger.warning(
+            "campaign_resume_requeue_deferred",
+            extra={"campaign_id": str(campaign_id), "reason": type(exc).__name__},
+        )
+    except redis.RedisError as exc:
+        logger.error(
+            "campaign_resume_requeue_failed",
+            extra={"campaign_id": str(campaign_id), "error_type": type(exc).__name__},
+        )
+    return None

@@ -24,7 +24,7 @@ from app.services.campaign_contact_service import CampaignContactService
 from app.services.campaign_service import CampaignService
 from app.services.contact_import_service import ContactImportService
 from app.services.contact_service import ContactService
-from app.services.queue.enqueue_service import QueueEnqueueService
+from app.services.queue.enqueue_service import QueueEnqueueService, requeue_after_resume
 from app.services.queue.factory import get_queue
 
 router = APIRouter(prefix="/api/v1/campaigns", tags=["Campaigns"])
@@ -90,7 +90,11 @@ def update_campaign(
     db: Session = Depends(get_db),
     principal: AdminPrincipal = _ADMIN,
 ) -> CampaignResponse:
-    campaign = CampaignService(db, actor=principal.username).update_campaign(campaign_id, data)
+    service = CampaignService(db, actor=principal.username)
+    campaign = service.update_campaign(campaign_id, data)
+    if service.resumed:
+        db.commit()  # the durable ACTIVE state first; only then touch Redis (CP12-B)
+        requeue_after_resume(db, get_queue(), campaign_id, actor=principal.username)
     return CampaignResponse.model_validate(campaign)
 
 
