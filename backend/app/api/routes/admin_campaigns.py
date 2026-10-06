@@ -21,6 +21,8 @@ from app.schemas.pagination import Page
 from app.services.admin.auth import AdminPrincipal
 from app.services.admin.campaign_service import get_campaign_detail, list_campaigns
 from app.services.campaign_service import CampaignService
+from app.services.queue.enqueue_service import requeue_after_resume
+from app.services.queue.factory import get_queue
 
 router = APIRouter(prefix="/api/v1/admin/campaigns", tags=["Admin Campaigns"])
 
@@ -59,7 +61,9 @@ def transition_campaign_status(
 ) -> CampaignResponse:
     """§5: operational controls (activate/pause/resume/complete) require
     the `admin` role, unlike the read-only monitoring endpoints above."""
-    campaign = CampaignService(db, actor=principal.username).update_campaign(
-        campaign_id, CampaignUpdate(status=new_status)
-    )
+    service = CampaignService(db, actor=principal.username)
+    campaign = service.update_campaign(campaign_id, CampaignUpdate(status=new_status))
+    if service.resumed:
+        db.commit()  # the durable ACTIVE state first; only then touch Redis (CP12-B)
+        requeue_after_resume(db, get_queue(), campaign_id, actor=principal.username)
     return CampaignResponse.model_validate(campaign)

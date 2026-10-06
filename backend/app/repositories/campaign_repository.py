@@ -13,8 +13,17 @@ class CampaignRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def get_by_id(self, campaign_id: uuid.UUID) -> Campaign | None:
-        return self.db.get(Campaign, campaign_id)
+    def get_by_id(self, campaign_id: uuid.UUID, *, for_update: bool = False) -> Campaign | None:
+        if not for_update:
+            return self.db.get(Campaign, campaign_id)
+        # CP12-B: status transitions serialize on the row. populate_existing so the status
+        # compared below is the committed one, never a stale identity-map copy.
+        return self.db.execute(
+            select(Campaign)
+            .where(Campaign.id == campaign_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
 
     def add(self, campaign: Campaign) -> Campaign:
         self.db.add(campaign)
