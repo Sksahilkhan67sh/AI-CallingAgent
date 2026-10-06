@@ -109,7 +109,7 @@ def test_reclaimed_job_is_not_reprocessed_twice(db_session, redis_client, provid
     )
     db_session.commit()
 
-    # Campaign is paused -- DialEligibilityService's fresh re-check
-    # (already existing CP03 behavior) must skip the dial entirely.
-    assert outcome == JobOutcome.NOT_ELIGIBLE
+    # Campaign is paused -- the fresh durable re-check must skip the dial entirely
+    # (CP12-B: deferred as CAMPAIGN_PAUSED, no longer the acked NOT_ELIGIBLE).
+    assert outcome == JobOutcome.CAMPAIGN_PAUSED
     assert db_session.query(CallAttempt).filter(CallAttempt.contact_id == contact.id).count() == 0

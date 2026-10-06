@@ -441,7 +441,10 @@ def test_13_paused_campaign_no_lookup_no_trigger(fake, redis_client, provider):
     )
     outcome = _process(sc, redis_client, provider, sc.queue.read_one("w3", 100))
 
-    assert outcome == JobOutcome.NOT_ELIGIBLE
+    # CP12-B: the retry job is HELD (left unacked), not acked-and-dropped as NOT_ELIGIBLE --
+    # a paused retry must survive until the campaign resumes.
+    assert outcome == JobOutcome.CAMPAIGN_PAUSED_HELD
+    assert _pending(sc.queue) == 1
     assert fake.calls == 1 and fake.reconcile_calls == 1
 
 
