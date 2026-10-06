@@ -4,7 +4,7 @@ Processing contract for one job:
 
   read -> admission (rate/concurrency/circuit) -> load DB state ->
   final eligibility -> claim/create CallAttempt -> dial via provider ->
-  persist outcome -> release admission slot -> ack
+  persist outcome -> release concurrency lease -> ack
 
 Nothing is acked before the outcome is durably persisted (Step 5). A
 job that fails admission is left unacked so it can be retried by this
@@ -173,17 +173,25 @@ def process_claimed_job(
         )
         return JobOutcome.OUTBOUND_BLOCKED  # left unacked on purpose: job stays queued
 
-    admitted = False
+    # CP12-A: the concurrency slot is a lease keyed by the job's idempotency key (one logical
+    # attempt = one slot; the CallAttempt row does not exist yet at admission). It is released
+    # in the `finally` below, and expires on its own if this process dies before reaching it.
+    lease = None
     for _ in range(_ADMISSION_RETRY_ATTEMPTS):
-        result = admission.try_admit(campaign_id=job.campaign_id, provider_name=provider_name)
+        result = admission.try_admit(
+            campaign_id=job.campaign_id,
+            provider_name=provider_name,
+            holder_id=job.idempotency_key,
+        )
         if result.admitted:
-            admitted = True
+            lease = result.lease
             break
         time.sleep(_ADMISSION_RETRY_SLEEP_SECONDS)
 
-    if not admitted:
+    if lease is None:
         logger.info(
-            "admission_backpressure", extra={"job_id": job.job_id, "trace_id": job.trace_id}
+            "admission_backpressure",
+            extra={"job_id": job.job_id, "trace_id": job.trace_id, "reason": result.reason},
         )
         return JobOutcome.NOT_ADMITTED  # left unacked on purpose
 
@@ -199,7 +207,7 @@ def process_claimed_job(
         db.rollback()
         raise
     finally:
-        admission.release(campaign_id=job.campaign_id, provider_name=provider_name)
+        admission.release(lease)
     if outcome not in _LEFT_UNACKED:
         queue.ack(message_id)
     return outcome

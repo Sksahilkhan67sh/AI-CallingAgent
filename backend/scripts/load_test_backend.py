@@ -218,13 +218,13 @@ def main() -> int:  # noqa: C901 - a linear benchmark script
     for _ in range(adm_n):
         a = time.perf_counter()
         res = admission.try_admit(campaign_id=campaign_id, provider_name="dograh")
-        admission.release(campaign_id=campaign_id, provider_name="dograh")
+        admission.release(res.lease)
         adm_lat.append(time.perf_counter() - a)
         assert res.admitted
     adm_secs = time.perf_counter() - t0
     out["3_admission"] = {"ops": adm_n, "ops_per_s": round(adm_n / adm_secs), **lat(adm_lat)}
-    r.delete("concurrency:global", f"concurrency:campaign:{campaign_id}",
-             "concurrency:provider:dograh")
+    r.delete("concurrency:lease:global", f"concurrency:lease:campaign:{campaign_id}",
+             "concurrency:lease:provider:dograh")
 
     # ---- stage 4: worker claim throughput (isolated, no processing) --------
     claim_q = RedisStreamQueue(r, "load:claimonly", "load:claimonly:g")

@@ -204,7 +204,7 @@ def test_transient_db_failure_before_persistence_loses_no_job_and_dials_once(
 
     assert _pending(queue) == 1  # NOT acked: the job survives the DB failure
     assert _attempts(contact_id) == [] and dograh.calls == 0
-    assert redis_client.get("concurrency:global") == "0"  # admission slot not leaked
+    assert redis_client.zcard("concurrency:lease:global") == 0  # admission slot not leaked
 
     # DB recovered: the stale job is reclaimed and processed normally.
     (reclaimed,) = queue.reclaim_stale("w2", idle_ms=0)
