@@ -1,9 +1,12 @@
 """Enqueue eligible campaign contacts -- Checkpoint 03 Steps 24-27.
 
-Synchronous, bounded, and chunked (Step 25) -- the same pattern
-Checkpoint 02's bulk import used for the same reason: no background job
-system exists yet, so this must stay safe to run inline within one
-HTTP request rather than needing one.
+Synchronous, bounded, and paged (Step 25) -- no background job system
+exists yet, so this must stay safe to run inline within one HTTP request.
+
+CP12-C (H2): the scan is KEYSET-paginated on the contact primary key. It used to be
+LIMIT/OFFSET over "status = PENDING" ordered by created_at: workers flip contacts out of
+PENDING while the scan runs, so the filtered set shrank under the offset (rows were jumped
+over) and the per-page total shrank under the stop test -- ~700 of ~1200 contacts got queued.
 
 Scope: only ever enqueues attempt_number=1, for Pending contacts that
 have never been attempted (attempt_count == 0). Retrying a contact that
@@ -11,14 +14,17 @@ already has an attempt is explicitly a later checkpoint's job (Step 18).
 """
 
 import logging
+import time
 import uuid
 
 import redis
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
 from app.core.request_context import current_request_id
-from app.models.enums import CampaignStatus, ContactStatus
+from app.models.enums import CampaignStatus
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
@@ -28,7 +34,7 @@ from app.services.audit_service import record_audit_event
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 
-CHUNK_SIZE = 500
+# Newly queued jobs per request. Reaching it is reported (complete=False), never silent.
 MAX_ENQUEUE_PER_REQUEST = 100_000
 # Soft, best-effort duplicate-enqueue guard (Step 26). The database's
 # unique (contact_id, attempt_number) constraint, enforced when the
@@ -83,69 +89,145 @@ class QueueEnqueueService:
             self.db.commit()
             raise ConflictError("Outbound calling is disabled by the global kill switch")
 
-        enqueued = 0
-        skipped_suppressed = 0
-        skipped_duplicate = 0
-        offset = 0
+        page_size = get_settings().enqueue_page_size
+        discovered = enqueued = skipped_suppressed = skipped_duplicate = pages = 0
+        complete = True
+        cursor: uuid.UUID | None = None
+        started = time.monotonic()
 
-        while True:
-            items, total = self.contacts.list(
-                campaign_id=campaign_id,
-                status=ContactStatus.PENDING,
-                limit=CHUNK_SIZE,
-                offset=offset,
-            )
-            if not items:
-                break
-
-            for contact in items:
-                if enqueued + skipped_suppressed + skipped_duplicate >= MAX_ENQUEUE_PER_REQUEST:
-                    break
-
-                if contact.attempt_count > 0:
-                    continue  # retries are out of scope this checkpoint
-
-                if self.suppressions.is_suppressed(contact.normalized_phone_number):
-                    skipped_suppressed += 1
-                    continue
-
-                job = DialJob.new(
-                    campaign_id=campaign_id, contact_id=contact.id, attempt_number=1
+        try:
+            while complete:
+                page = self.contacts.eligible_enqueue_page(
+                    campaign_id, after_id=cursor, limit=page_size
                 )
+                if not page:
+                    break  # the ONLY way a scan ends: an empty page, never a short one
+                suppressed = self.suppressions.suppressed_among({phone for _, phone in page})
+                # End the read transaction: nothing below may run inside one (Redis I/O).
+                self.db.commit()
 
-                guard_key = enqueue_guard_key(job.idempotency_key)
-                if not self.queue.redis.set(
-                    guard_key, "1", nx=True, ex=_ENQUEUE_GUARD_TTL_SECONDS
-                ):
-                    skipped_duplicate += 1
-                    continue
+                for contact_id, phone in page:
+                    if enqueued >= MAX_ENQUEUE_PER_REQUEST:
+                        complete = False
+                        break
+                    if phone in suppressed:
+                        skipped_suppressed += 1
+                    else:
+                        job = DialJob.new(
+                            campaign_id=campaign_id, contact_id=contact_id, attempt_number=1
+                        )
+                        if self.queue.enqueue_once(
+                            job, enqueue_guard_key(job.idempotency_key), _ENQUEUE_GUARD_TTL_SECONDS
+                        ):
+                            enqueued += 1
+                        else:
+                            skipped_duplicate += 1
+                    discovered += 1
 
-                self.queue.enqueue(job)
-                enqueued += 1
-
-            offset += CHUNK_SIZE
-            if offset >= total:
-                break
+                # Advance only after the whole page was handled; an exception above leaves
+                # the cursor (and the counts) exactly at what was truly processed.
+                if complete:
+                    cursor = page[-1][0]
+                pages += 1
+                logger.info(
+                    "campaign_enqueue_page",
+                    extra={
+                        "campaign_id": str(campaign_id),
+                        "page": pages,
+                        "page_size": page_size,
+                        "rows": len(page),
+                        "discovered": discovered,
+                        "enqueued": enqueued,
+                        "skipped_suppressed": skipped_suppressed,
+                        "skipped_duplicate": skipped_duplicate,
+                        "cursor": str(cursor) if cursor else None,
+                    },
+                )
+        except redis.RedisError as exc:
+            # Truthful partial result: what was queued stays queued (and guarded), the rest is
+            # untouched, and a re-run is idempotent. Never report a success.
+            self._record_failure(campaign_id, pages, discovered, enqueued, exc)
+            raise ServiceUnavailableError(
+                f"Enqueue interrupted by a queue error after queueing {enqueued} job(s) "
+                f"({discovered} contact(s) handled); re-running it is safe"
+            ) from exc
+        except SQLAlchemyError as exc:
+            logger.error(
+                "campaign_enqueue_failed",
+                extra={
+                    "campaign_id": str(campaign_id),
+                    "pages": pages,
+                    "discovered": discovered,
+                    "enqueued": enqueued,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
 
         record_audit_event(
             self.db,
             actor=self.actor,
             action="campaign.enqueued",
             entity_type="campaign",
-            entity_id=campaign.id,
+            entity_id=campaign_id,
             metadata={
                 "enqueued": enqueued,
                 "skipped_suppressed": skipped_suppressed,
                 "skipped_duplicate": skipped_duplicate,
+                "discovered": discovered,
+                "pages_processed": pages,
+                "complete": complete,
             },
         )
-
+        logger.info(
+            "campaign_enqueue_completed",
+            extra={
+                "campaign_id": str(campaign_id),
+                "pages": pages,
+                "discovered": discovered,
+                "enqueued": enqueued,
+                "complete": complete,
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
         return EnqueueResult(
-            campaign_id=campaign.id,
+            campaign_id=campaign_id,
             enqueued=enqueued,
             skipped_suppressed=skipped_suppressed,
             skipped_duplicate=skipped_duplicate,
+            discovered=discovered,
+            pages_processed=pages,
+            complete=complete,
         )
+
+    def _record_failure(
+        self, campaign_id: uuid.UUID, pages: int, discovered: int, enqueued: int, exc: Exception
+    ) -> None:
+        logger.error(
+            "campaign_enqueue_failed",
+            extra={
+                "campaign_id": str(campaign_id),
+                "pages": pages,
+                "discovered": discovered,
+                "enqueued": enqueued,
+                "error_type": type(exc).__name__,
+            },
+        )
+        # Committed before raising: get_db rolls back on an exception.
+        record_audit_event(
+            self.db,
+            actor=self.actor,
+            action="campaign.enqueue_failed",
+            entity_type="campaign",
+            entity_id=campaign_id,
+            metadata={
+                "enqueued": enqueued,
+                "discovered": discovered,
+                "pages_processed": pages,
+                "request_id": current_request_id(),
+            },
+        )
+        self.db.commit()
 
 
 def requeue_after_resume(

@@ -21,6 +21,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
 _CALLING_ENGINES = frozenset({"native", "dograh"})
+_MAX_ENQUEUE_PAGE_SIZE = 5_000
 _DOGRAH_TRIGGER_MODES = frozenset({"test", "production"})
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 # CP11 production secret policy. Lengths are deliberately modest floors, not a
@@ -162,6 +163,9 @@ class Settings(BaseSettings):
     # contacts; an import parses a 5 MB CSV) so they are far tighter than ordinary
     # mutations / analysis reads.
     enqueue_rate_limit_per_minute: int = 5
+    # CP12-C: contacts fetched per keyset page when enqueueing a campaign. Bounds the memory
+    # and the IN-list of one page; bounded above so a typo cannot materialise a campaign.
+    enqueue_page_size: int = 500
     import_rate_limit_per_minute: int = 5
     mutation_rate_limit_per_minute: int = 120
     analysis_rate_limit_per_minute: int = 120
@@ -245,6 +249,9 @@ class Settings(BaseSettings):
         ):
             if getattr(self, name) <= 0:
                 problems.append(f"{name.upper()} must be > 0")
+
+        if not 1 <= self.enqueue_page_size <= _MAX_ENQUEUE_PAGE_SIZE:
+            problems.append(f"ENQUEUE_PAGE_SIZE must be between 1 and {_MAX_ENQUEUE_PAGE_SIZE}")
 
         if self.calling_engine == "dograh":
             parsed = urlparse(self.dograh_api_base_url)
