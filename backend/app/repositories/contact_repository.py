@@ -2,6 +2,7 @@
 app.services.contact_service for those."""
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -61,6 +62,24 @@ class ContactRepository:
         )
         items = list(self.db.execute(stmt).scalars())
         return items, total
+
+    def eligible_enqueue_page(
+        self, campaign_id: uuid.UUID, *, after_id: uuid.UUID | None, limit: int
+    ) -> Sequence[tuple[uuid.UUID, str]]:
+        """CP12-C: one keyset page of enqueue candidates -- the contacts the first-attempt
+        enqueue owns: PENDING and never attempted. Ordered by the primary key (unique, indexed,
+        total order) and resumed with `id > after_id`, so the page boundary cannot shift when
+        rows change underneath a long scan (OFFSET could, and skipped them). Only the two
+        columns enqueue needs are fetched."""
+        stmt = select(Contact.id, Contact.normalized_phone_number).where(
+            Contact.campaign_id == campaign_id,
+            Contact.status == ContactStatus.PENDING,
+            Contact.attempt_count == 0,
+        )
+        if after_id is not None:
+            stmt = stmt.where(Contact.id > after_id)
+        rows = self.db.execute(stmt.order_by(Contact.id).limit(limit)).all()
+        return [(row.id, row.normalized_phone_number) for row in rows]
 
     def campaign_counts(self, campaign_id: uuid.UUID) -> dict[str, int]:
         """Step 21 -- one aggregate query, not one query per contact."""
