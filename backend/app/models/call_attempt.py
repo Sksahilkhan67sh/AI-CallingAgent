@@ -9,7 +9,7 @@ deliberately -- they are different taxonomies and must not be collapsed
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -38,6 +38,8 @@ class CallAttempt(Base):
             "uq_call_attempt_provider_call_id", "provider_call_id", unique=True,
             postgresql_where="provider_call_id IS NOT NULL",
         ),
+        # CP14: the daily budget counts attempts created inside today's window.
+        Index("ix_call_attempt_started_at", "started_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -70,3 +72,6 @@ class CallAttempt(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # CP14: provider-reported call length, persisted from the Dograh webhook so the daily
+    # spend ESTIMATE can use it. NULL = unknown (the estimate then assumes a default).
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
