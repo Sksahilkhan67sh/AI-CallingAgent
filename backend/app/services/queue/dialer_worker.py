@@ -17,7 +17,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.call_attempt import CallAttempt
@@ -46,6 +46,13 @@ from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.manager import RecoveryManager
 from app.services.telephony.base import ProviderOutcome, TelephonyProvider
 from app.services.telephony.circuit_breaker import CircuitBreaker
+from app.services.telephony.dograh_outcome import (
+    REASON_CONFIGURATION,
+    REASON_PROVIDER_ERROR,
+    TriggerFailure,
+    TriggerPolicy,
+    classify_trigger_error,
+)
 from app.services.telephony.dograh_reconciliation import (
     AMBIGUOUS_TRIGGER_EVENT,
     is_unresolved_ambiguous_trigger,
@@ -86,6 +93,10 @@ class JobOutcome:
     # trigger created a call. Fail closed: no dial, left UNACKED so a
     # redelivery re-checks instead of dialing blind.
     RECONCILE_DEFERRED = "reconcile_deferred"
+    # CP13: the lookup kept failing past DOGRAH_RECONCILE_MAX_DEFERRALS. Whether the earlier
+    # trigger created a call can no longer be established, so the retry is abandoned (acked,
+    # no dial) instead of polled forever. Duplicate-call avoidance wins over the retry.
+    RECONCILE_EXPIRED = "reconcile_expired"
     # CP12-B: the campaign is paused. The job is NOT lost, NOT counted as handled, and no
     # concurrency lease / CPS slot was (or stays) taken. Two dispositions, see _settle_paused:
     #   CAMPAIGN_PAUSED       -- first-attempt job whose logical record is still the Postgres
@@ -446,21 +457,44 @@ def _record_dograh_trigger_failure(
     status_code: int | None,
     category: str,
     reconcile: str | None = None,
+    reason_key: str = REASON_PROVIDER_ERROR,
+    retry_after_seconds: int | None = None,
 ) -> None:
     """Terminal never-connected outcome for a trigger that did not yield a run;
     the ONLY follow-up is RecoveryManager's decision (backoff, bounds,
-    suppression/eligibility re-checks)."""
+    suppression/eligibility re-checks). `reason_key` (CP13) tells it what kind of failure
+    this was; this function never decides retry vs terminal itself."""
     attempt.provider = "dograh"
     attempt.state = CallAttemptState.FAILED_TO_CONNECT
     attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
     attempt.ended_at = datetime.now(UTC)
-    payload: dict = {"status_code": status_code, "category": category}
+    payload: dict = {"status_code": status_code, "category": category, "reason_key": reason_key}
     if reconcile is not None:
         payload["reconcile"] = reconcile
+    if retry_after_seconds is not None:
+        payload["retry_after_seconds"] = retry_after_seconds
     db.add(CallEvent(call_attempt_id=attempt.id, event_type=event_type, payload=payload))
+    record_audit_event(
+        db,
+        actor="dialer-worker",
+        action=f"dograh.{reason_key}",
+        entity_type="call_attempt",
+        entity_id=attempt.id,
+        metadata={
+            "campaign_id": str(contact.campaign_id),
+            "status_code": status_code,
+            "category": category,
+            "retry_after_seconds": retry_after_seconds,
+        },
+    )
     db.flush()
     _handle_never_connected_failure(
-        db, attempt, contact, NeverConnectedFailureReason.PROVIDER_ERROR
+        db,
+        attempt,
+        contact,
+        NeverConnectedFailureReason.PROVIDER_ERROR,
+        reason_key=reason_key,
+        retry_after_seconds=retry_after_seconds,
     )
 
 
@@ -582,6 +616,55 @@ def _reconcile_with_dograh(
     return outcome, "adopted" if outcome == JobOutcome.RECONCILED else "multiple"
 
 
+def _defer_or_expire_reconciliation(
+    db: Session, previous: CallAttempt, contact: Contact, ids: dict[str, str], failure: str | None
+) -> str:
+    """CP13: the pre-retry lookup failed. Defer (fail closed, no dial) -- but only a bounded
+    number of times. Each deferral is a durable audit row on the previous attempt, so the
+    count survives a worker restart. Once DOGRAH_RECONCILE_MAX_DEFERRALS deferrals are spent
+    the retry is ABANDONED rather than polled forever: whether the earlier trigger created a
+    call can no longer be established, and a missed retry is the cheaper error than ringing
+    a customer twice."""
+    from app.core.config import get_settings
+    from app.models.audit_log import AuditLog
+
+    deferred = db.execute(
+        select(func.count())
+        .select_from(AuditLog)
+        .where(
+            AuditLog.entity_type == "call_attempt",
+            AuditLog.entity_id == previous.id,
+            AuditLog.action == "dograh.reconciliation_deferred",
+        )
+    ).scalar_one()
+
+    if deferred >= get_settings().dograh_reconcile_max_deferrals:
+        logger.warning("reconciliation_expired", extra={**ids, "deferrals": deferred})
+        record_audit_event(
+            db,
+            actor="dialer-worker",
+            action="dograh.reconciliation_expired",
+            entity_type="call_attempt",
+            entity_id=previous.id,
+            metadata={**ids, "deferrals": deferred, "lookup_failure": failure},
+        )
+        contact.status = ContactStatus.COMPLETED_PARTIAL
+        db.flush()
+        return JobOutcome.RECONCILE_EXPIRED
+
+    if deferred == 0:
+        logger.info("reconciliation_started", extra=ids)
+    record_audit_event(
+        db,
+        actor="dialer-worker",
+        action="dograh.reconciliation_deferred",
+        entity_type="call_attempt",
+        entity_id=previous.id,
+        metadata={**ids, "lookup_failure": failure, "deferrals": deferred + 1},
+    )
+    return JobOutcome.RECONCILE_DEFERRED
+
+
 def _second_reconciliation_gate(
     db: Session, attempts: CallAttemptRepository, contact: Contact, job: DialJob
 ) -> str | None:
@@ -613,7 +696,7 @@ def _second_reconciliation_gate(
     run_ids, failure = _lookup_dograh_runs(db, previous, stage="second", ids=ids)
     if run_ids is None:
         logger.warning("reconciliation_retry_blocked", extra={**ids, "reason": f"lookup_{failure}"})
-        return JobOutcome.RECONCILE_DEFERRED
+        return _defer_or_expire_reconciliation(db, previous, contact, ids, failure)
 
     # Serialise with any other worker holding the same retry. The HTTP lookup
     # is already done, so the row lock is held only for short DB work.
@@ -709,6 +792,12 @@ def _place_call(
     return None
 
 
+def _trigger_event_type(failure: TriggerFailure) -> str:
+    if failure.policy == TriggerPolicy.AMBIGUOUS:
+        return AMBIGUOUS_TRIGGER_EVENT
+    return "DOGRAH_TRIGGER_FAILED"  # the payload's reason_key says which kind
+
+
 def _place_call_via_dograh(
     db: Session, contact: Contact, attempt: CallAttempt, job: DialJob
 ) -> str | None:
@@ -731,11 +820,7 @@ def _place_call_via_dograh(
     classification).
     """
     from app.core.redis_client import get_redis
-    from app.services.telephony.dograh_client import (
-        AMBIGUOUS_CATEGORIES,
-        DograhApiError,
-        DograhConfigurationError,
-    )
+    from app.services.telephony.dograh_client import DograhApiError, DograhConfigurationError
     from app.services.telephony.factory import get_dograh_client
 
     campaign = db.get(Campaign, contact.campaign_id)
@@ -777,19 +862,35 @@ def _place_call_via_dograh(
             event_type="DOGRAH_CONFIGURATION_ERROR",
             status_code=None,
             category="configuration_error",
+            reason_key=REASON_CONFIGURATION,
         )
         return None
     except DograhApiError as exc:
-        is_ambiguous = exc.category in AMBIGUOUS_CATEGORIES
+        failure = classify_trigger_error(exc)
+        is_ambiguous = failure.policy == TriggerPolicy.AMBIGUOUS
         logger.warning(
             "dograh_trigger_failed",
             extra={
                 **log_extra,
                 "status_code": exc.status_code,
                 "category": exc.category.value,
+                "policy": failure.policy.value,
+                "reason_key": failure.reason_key,
                 "ambiguous": is_ambiguous,
             },
         )
+        if failure.policy == TriggerPolicy.RATE_LIMITED:
+            logger.warning(
+                "provider_rate_limited",
+                extra={**log_extra, "retry_after_seconds": failure.retry_after_seconds},
+            )
+            if failure.retry_after_seconds is not None:
+                logger.info(
+                    "retry_after_applied",
+                    extra={**log_extra, "retry_after_seconds": failure.retry_after_seconds},
+                )
+        elif failure.policy == TriggerPolicy.PERMANENT:
+            logger.error("provider_configuration_error", extra=log_extra)
         # Checkpoint 09 §1.3: an ambiguous outcome (the request may have
         # reached Dograh before the response was lost) is never retried
         # immediately. First ask Dograh's documented run listing whether a run
@@ -812,10 +913,12 @@ def _place_call_via_dograh(
             db,
             attempt,
             contact,
-            event_type=AMBIGUOUS_TRIGGER_EVENT if is_ambiguous else "DOGRAH_TRIGGER_FAILED",
+            event_type=_trigger_event_type(failure),
             status_code=exc.status_code,
             category=exc.category.value,
             reconcile=reconcile_note,
+            reason_key=failure.reason_key,
+            retry_after_seconds=failure.retry_after_seconds,
         )
         return None
 
@@ -869,7 +972,13 @@ def _start_conversation_safely(
 
 
 def _handle_never_connected_failure(
-    db: Session, attempt: CallAttempt, contact: Contact, reason: NeverConnectedFailureReason
+    db: Session,
+    attempt: CallAttempt,
+    contact: Contact,
+    reason: NeverConnectedFailureReason,
+    *,
+    reason_key: str | None = None,
+    retry_after_seconds: int | None = None,
 ) -> None:
     """Checkpoint 05: a never-connected failure (no_answer, busy, etc.)
     also goes through the single RecoveryManager -- Checkpoint 03 left
@@ -883,7 +992,12 @@ def _handle_never_connected_failure(
         campaign = db.get(Campaign, contact.campaign_id)
         if campaign is not None:
             RecoveryManager(db, get_recovery_scheduler()).handle_disconnect(
-                attempt, contact, campaign, never_connected=True, reason_key=reason.value
+                attempt,
+                contact,
+                campaign,
+                never_connected=True,
+                reason_key=reason_key or reason.value,
+                retry_after_seconds=retry_after_seconds,
             )
     except Exception:
         logger.exception("recovery_handling_failed", extra={"attempt_id": str(attempt.id)})

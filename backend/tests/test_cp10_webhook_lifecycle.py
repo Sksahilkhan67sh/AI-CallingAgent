@@ -20,8 +20,9 @@ from app.models.enums import (
     NeverConnectedFailureReason,
 )
 from app.services.phone import normalize_phone_number
+from app.services.telephony.dograh_outcome import classify_call_outcome as _normalize
 from app.services.telephony.dograh_reconciliation import AMBIGUOUS_TRIGGER_EVENT
-from app.services.telephony.dograh_webhook_service import _is_safe_transcript_url, _normalize
+from app.services.telephony.dograh_webhook_service import _is_safe_transcript_url
 
 S = CallAttemptState
 URL = "/api/v1/webhooks/dograh/call-completed"
@@ -36,15 +37,14 @@ URL = "/api/v1/webhooks/dograh/call-completed"
         ("user_hangup", S.ENDED_NORMALLY),
         ("USER_HANGUP", S.ENDED_NORMALLY),
         ("  Completed ", S.ENDED_NORMALLY),
-        ("agent-finished", S.ENDED_NORMALLY),
+        ("end_call", S.ENDED_NORMALLY),
         ("no_answer", S.FAILED_TO_CONNECT),
         ("No Answer", S.FAILED_TO_CONNECT),
+        ("no-answer", S.FAILED_TO_CONNECT),  # Dograh's real hyphenated spelling
         ("busy", S.FAILED_TO_CONNECT),
-        ("rejected", S.FAILED_TO_CONNECT),
-        ("invalid_number", S.FAILED_TO_CONNECT),
-        ("provider_error", S.DROPPED_MID_CALL),
-        ("network_timeout", S.DROPPED_MID_CALL),
-        ("customer_disconnect", S.DROPPED_MID_CALL),
+        ("failed", S.FAILED_TO_CONNECT),
+        ("pipeline_error", S.DROPPED_MID_CALL),
+        ("unexpected_error", S.DROPPED_MID_CALL),
     ],
 )
 def test_known_status_variants(status, expected):
@@ -52,12 +52,19 @@ def test_known_status_variants(status, expected):
     assert (c.state, c.recognized) == (expected, True)
 
 
-@pytest.mark.parametrize("status", [None, "", "   ", "mystery", "incomplete", "in_progress", "?"])
+@pytest.mark.parametrize(
+    "status", [None, "", "   ", "mystery", "incomplete", "?", "rejected", "invalid_number"]
+)
 def test_unknown_or_empty_status_is_never_success_and_never_a_connected_call(status):
     c = _normalize(status, None)
     assert c.state == S.FAILED_TO_CONNECT
     assert c.never_connected_reason == NeverConnectedFailureReason.PROVIDER_ERROR
     assert c.recognized is False
+
+
+@pytest.mark.parametrize("status", ["initiated", "ringing", "in-progress", "answered"])
+def test_non_final_status_takes_no_decision(status):
+    assert _normalize(status, None).non_final is True
 
 
 def test_business_disposition_does_not_change_a_recognized_status():
@@ -72,7 +79,7 @@ def test_business_disposition_does_not_change_a_recognized_status():
         ("completed", "busy"),
         ("no_answer", "completed"),  # claims never connected vs. success
         ("busy", "user_hangup"),
-        ("user_hangup", "provider_error"),
+        ("user_hangup", "failed"),
     ],
 )
 def test_conflicting_status_and_disposition_is_not_trusted_as_success(status, disposition):

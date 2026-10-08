@@ -35,4 +35,5 @@ def get_dograh_client() -> DograhClient:
         mode=settings.dograh_trigger_mode,
         connect_timeout=settings.dograh_connect_timeout_seconds,
         read_timeout=settings.dograh_read_timeout_seconds,
+        retry_after_max_seconds=settings.dograh_retry_after_max_seconds,
     )

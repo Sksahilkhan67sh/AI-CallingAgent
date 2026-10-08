@@ -22,14 +22,15 @@ dropped mid-call / ended normally), not the two-way split Checkpoint
 """
 
 import logging
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -38,16 +39,17 @@ from app.models.enums import (
     CallAttemptState,
     ContactStatus,
     ConversationSessionStatus,
-    MidCallDisconnectReason,
-    NeverConnectedFailureReason,
+    SuppressionSource,
 )
 from app.models.processed_event import ProcessedEvent
+from app.models.suppression import Suppression
 from app.schemas.dograh_webhook import DograhWebhookPayload
 from app.services.analysis.admission import enqueue_call_analysis
 from app.services.audit_service import record_audit_event
 from app.services.processed_event_service import claim_event
 from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.manager import RecoveryManager
+from app.services.telephony.dograh_outcome import classify_call_outcome, is_opt_out
 from app.services.telephony.dograh_reconciliation import (
     is_unresolved_ambiguous_trigger,
     reopen_for_adoption,
@@ -58,43 +60,6 @@ logger = logging.getLogger("dograh_webhook")
 
 _ACTOR = "dograh-webhook"
 _EVENT_TYPE = "dograh.call_completed"
-
-# §Classification heuristic -- Dograh's `call_status` is a free-text
-# "observed reason the call ended" (its own docs: "never inferred"),
-# with no fixed enum published. Rather than guess an exhaustive
-# vocabulary, this keys off the same kind of keyword match already
-# used elsewhere in this codebase for an equivalent problem (e.g.
-# FakeAnalysisLLM's keyword-driven classification, Checkpoint 06) --
-# documented as a heuristic, easy to extend.
-#
-# Checked in order: NEVER_CONNECTED first (most specific -- a call
-# that never reached a person), then DROPPED_MID_CALL (a technical
-# failure during an active conversation), else ENDED_NORMALLY. A bare
-# "fail" is deliberately NOT a DROPPED_MID_CALL keyword on its own --
-# it's too ambiguous between "never connected" and "dropped mid-call"
-# to classify without more context, so only the more specific
-# technical-failure words below trigger that bucket.
-_NEVER_CONNECTED_KEYWORDS: tuple[tuple[str, NeverConnectedFailureReason], ...] = (
-    ("no_answer", NeverConnectedFailureReason.NO_ANSWER),
-    ("no answer", NeverConnectedFailureReason.NO_ANSWER),
-    ("busy", NeverConnectedFailureReason.BUSY),
-    ("invalid_number", NeverConnectedFailureReason.INVALID_NUMBER),
-    ("invalid number", NeverConnectedFailureReason.INVALID_NUMBER),
-    ("rejected", NeverConnectedFailureReason.REJECTED),
-    ("unreachable", NeverConnectedFailureReason.NETWORK_ERROR),
-)
-_DROPPED_MID_CALL_KEYWORDS = ("error", "timeout", "disconnect", "drop", "technical")
-_NETWORK_KEYWORDS = ("network", "connection")
-# Normal completion is matched on WHOLE tokens (split on non-alphanumerics),
-# never substrings -- "complete" must not match "incomplete". "user_hangup"
-# (the value this integration's tests and CP08 notes assume) matches via
-# the "hangup" token. Dograh publishes no enum, so this allowlist is
-# UNVERIFIED against a live instance -- anything not matched here is
-# treated as *unrecognized*, never as a connected conversation.
-_NORMAL_COMPLETION_TOKENS = frozenset(
-    {"hangup", "completed", "complete", "finished", "success", "successful"}
-)
-
 
 class DograhWebhookError(Exception):
     def __init__(self, status_code: int, detail: str) -> None:
@@ -110,95 +75,49 @@ class DograhWebhookResult:
     outcome: str
 
 
-@dataclass(frozen=True)
-class _Classification:
-    state: CallAttemptState
-    mid_call_reason: MidCallDisconnectReason | None = None
-    never_connected_reason: NeverConnectedFailureReason | None = None
-    recognized: bool = True
-    # CP10: which input decided this -- "status", "disposition",
-    # "unrecognized" or "conflict". Audit metadata only; never branches logic.
-    basis: str = "status"
+def _suppress_for_opt_out(
+    db: Session, attempt: CallAttempt, contact: Contact, payload: DograhWebhookPayload
+) -> None:
+    """CP13: durable, idempotent opt-out. `suppression.contact_id` is the primary key, so
+    ON CONFLICT DO NOTHING makes N concurrent/repeated opt-outs converge on one row with no
+    error and (because only the inserting call audits) no duplicate audit trail. Written to
+    PostgreSQL in the same transaction as the attempt outcome: if it fails, the webhook is
+    not acknowledged and the event is not marked processed. Redis is never consulted.
 
-
-def _classify(call_status: str | None) -> _Classification:
-    text = (call_status or "").lower()
-
-    for keyword, reason in _NEVER_CONNECTED_KEYWORDS:
-        if keyword in text:
-            return _Classification(
-                CallAttemptState.FAILED_TO_CONNECT, never_connected_reason=reason
-            )
-
-    if any(keyword in text for keyword in _DROPPED_MID_CALL_KEYWORDS):
-        mid_call_reason = (
-            MidCallDisconnectReason.NETWORK_PROBLEM
-            if any(k in text for k in _NETWORK_KEYWORDS)
-            else MidCallDisconnectReason.TECHNICAL_ISSUE
+    Evidence used is recorded verbatim in the audit row: the configured disposition code, not
+    any transcript text and no phone number."""
+    # RETURNING, not rowcount: psycopg reports -1 for this statement, which is truthy.
+    inserted = db.execute(
+        pg_insert(Suppression)
+        .values(
+            contact_id=contact.id,
+            phone_number=contact.normalized_phone_number,
+            reason="opt-out via Dograh call disposition",
+            source=SuppressionSource.AGENT_IN_CALL,
         )
-        return _Classification(CallAttemptState.DROPPED_MID_CALL, mid_call_reason=mid_call_reason)
-
-    if _NORMAL_COMPLETION_TOKENS.intersection(re.split(r"[^a-z0-9]+", text)):
-        return _Classification(CallAttemptState.ENDED_NORMALLY)
-
-    # Unrecognized (including empty/None): we cannot claim the call
-    # connected, and we cannot skip recovery for what may have been a
-    # failure. Treated as a never-connected provider error -- no
-    # conversation session, no analysis -- so the ONLY consequence is the
-    # normal RecoveryManager decision (bounded retries, suppression and
-    # eligibility re-checked). Audited loudly so operators extend the
-    # keyword lists above.
-    return _Classification(
-        CallAttemptState.FAILED_TO_CONNECT,
-        never_connected_reason=NeverConnectedFailureReason.PROVIDER_ERROR,
-        recognized=False,
-        basis="unrecognized",
-    )
-
-
-def _normalize(call_status: str | None, call_disposition: str | None) -> _Classification:
-    """CP10: one deterministic mapping from Dograh's (call_status,
-    call_disposition) to our lifecycle classification.
-
-    `call_status` is Dograh's "observed reason the call ended" and is the
-    lifecycle authority. `call_disposition` is a workflow-defined business
-    outcome that merely falls back to the termination reason, so:
-      * an unrecognized disposition says nothing (business codes are free text);
-      * a recognized failure disposition may supply the outcome when the status
-        is unrecognized/empty -- acting on a failure signal is the safe direction;
-      * a normal-completion disposition NEVER rescues an unrecognized status --
-        unknown must not become success;
-      * a recognized status and a recognized disposition that disagree on
-        "ended normally vs. did not" are a CONFLICT: not trusted as a success,
-        routed to the same conservative never-connected/provider-error path as
-        an unrecognized status, and audited as such.
-    """
-    by_status = _classify(call_status)
-    if not (call_disposition or "").strip():
-        return by_status
-    by_disposition = _classify(call_disposition)
-    if not by_disposition.recognized:
-        return by_status
-
-    status_normal = by_status.state == CallAttemptState.ENDED_NORMALLY
-    disposition_normal = by_disposition.state == CallAttemptState.ENDED_NORMALLY
-    if not by_status.recognized:
-        if disposition_normal:
-            return by_status
-        return _Classification(
-            by_disposition.state,
-            mid_call_reason=by_disposition.mid_call_reason,
-            never_connected_reason=by_disposition.never_connected_reason,
-            basis="disposition",
+        .on_conflict_do_nothing(index_elements=[Suppression.contact_id])
+        .returning(Suppression.contact_id)
+    ).first()
+    contact.status = ContactStatus.CLOSED
+    db.flush()
+    if inserted is not None:
+        record_audit_event(
+            db,
+            actor=_ACTOR,
+            action="dograh.opt_out_suppressed",
+            entity_type="contact",
+            entity_id=contact.id,
+            metadata={
+                "call_attempt_id": str(attempt.id),
+                "campaign_id": str(contact.campaign_id),
+                "call_disposition": payload.call_disposition,
+                "mapped_call_disposition": payload.mapped_call_disposition,
+            },
         )
-    if status_normal != disposition_normal:
-        return _Classification(
-            CallAttemptState.FAILED_TO_CONNECT,
-            never_connected_reason=NeverConnectedFailureReason.PROVIDER_ERROR,
-            recognized=False,
-            basis="conflict",
+        logger.info(
+            "opt_out_suppressed",
+            extra={"attempt_id": str(attempt.id), "campaign_id": str(contact.campaign_id)},
         )
-    return by_status
 
 
 def _already_processed(payload: DograhWebhookPayload) -> "DograhWebhookResult":
@@ -343,9 +262,36 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
         CallAttemptState.DROPPED_MID_CALL,
         CallAttemptState.FAILED_TO_CONNECT,
     ):
+        # A webhook with an event id we have not seen, aimed at an attempt that already has
+        # an outcome, is not a normal duplicate. It is refused and left on the record.
+        logger.warning(
+            "invalid_provider_transition",
+            extra={"attempt_id": str(attempt.id), "from_state": attempt.state.value},
+        )
+        record_audit_event(
+            db,
+            actor=_ACTOR,
+            action="dograh.invalid_provider_transition",
+            entity_type="call_attempt",
+            entity_id=attempt.id,
+            metadata={"from_state": attempt.state.value, "call_status": payload.call_status},
+        )
         return DograhWebhookResult(call_attempt_id=attempt.id, outcome="already_processed")
 
-    classification = _normalize(payload.call_status, payload.call_disposition)
+    classification = classify_call_outcome(payload.call_status, payload.call_disposition)
+    if classification.non_final:
+        # `ringing` / `in-progress` ... on a completion webhook: the call may still be live,
+        # so no decision may be taken from it. The event is deliberately NOT claimed, so the
+        # real completion for the same run is still processed when it arrives.
+        logger.warning(
+            "dograh_webhook_non_final_status", extra={"attempt_id": str(attempt.id)}
+        )
+        return DograhWebhookResult(call_attempt_id=attempt.id, outcome="non_final_ignored")
+    opted_out = is_opt_out(
+        payload.call_disposition,
+        payload.mapped_call_disposition,
+        get_settings().dograh_opt_out_dispositions,
+    )
     state = classification.state
     disconnect_reason = classification.mid_call_reason
     never_connected_reason = classification.never_connected_reason
@@ -383,6 +329,9 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
         )
         db.flush()
 
+    if opted_out:
+        _suppress_for_opt_out(db, attempt, contact, payload)
+
     if state == CallAttemptState.FAILED_TO_CONNECT:
         assert never_connected_reason is not None
         attempt.state = CallAttemptState.FAILED_TO_CONNECT
@@ -413,7 +362,7 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
             contact,
             campaign,
             never_connected=True,
-            reason_key=never_connected_reason.value,
+            reason_key=classification.reason_key or never_connected_reason.value,
         )
         return DograhWebhookResult(call_attempt_id=attempt.id, outcome="never_connected")
 
@@ -430,7 +379,8 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     if state == CallAttemptState.ENDED_NORMALLY:
         attempt.state = CallAttemptState.ENDED_NORMALLY
         attempt.ended_at = ended_at
-        contact.status = ContactStatus.COMPLETED
+        if not opted_out:  # an opt-out leaves the contact Closed, not Completed
+            contact.status = ContactStatus.COMPLETED
         db.flush()
         record_audit_event(
             db,
@@ -447,7 +397,8 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     attempt.state = CallAttemptState.DROPPED_MID_CALL
     attempt.disconnect_reason = disconnect_reason
     attempt.ended_at = ended_at
-    contact.status = ContactStatus.DISCONNECTED
+    if not opted_out:
+        contact.status = ContactStatus.DISCONNECTED
     db.flush()
     record_audit_event(
         db,
@@ -462,6 +413,10 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
         },
     )
     RecoveryManager(db, get_recovery_scheduler()).handle_disconnect(
-        attempt, contact, campaign, never_connected=False, reason_key=disconnect_reason.value
+        attempt,
+        contact,
+        campaign,
+        never_connected=False,
+        reason_key=classification.reason_key or disconnect_reason.value,
     )
     return DograhWebhookResult(call_attempt_id=attempt.id, outcome="dropped_mid_call")

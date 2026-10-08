@@ -99,7 +99,7 @@ def test_technical_failure_status_routes_through_recovery(client, db_session):
     campaign, contact, attempt = _connected_call(db_session, phone="555-960-0005")
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
-        json={"call_attempt_id": str(attempt.id), "call_status": "technical_error_timeout"},
+        json={"call_attempt_id": str(attempt.id), "call_status": "pipeline_error"},
         headers=_headers(),
     )
 
