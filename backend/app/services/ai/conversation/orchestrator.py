@@ -30,7 +30,6 @@ from app.models.enums import (
     NextAction,
     SuppressionSource,
 )
-from app.models.suppression import Suppression
 from app.repositories.suppression_repository import SuppressionRepository
 from app.services.ai.audio.base import AudioSession
 from app.services.ai.conversation.context import build_turn_context
@@ -348,16 +347,12 @@ class ConversationOrchestrator:
     def _apply_suppression(self) -> None:
         """Opt-out enforcement (Step 17) -- writes through the one
         canonical SuppressionRepository, never a second table."""
-        suppressions = SuppressionRepository(self.db)
-        if not suppressions.is_suppressed(self.contact.normalized_phone_number):
-            suppressions.add(
-                Suppression(
-                    contact_id=self.contact.id,
-                    phone_number=self.contact.normalized_phone_number,
-                    reason="opt-out during AI conversation",
-                    source=SuppressionSource.AGENT_IN_CALL,
-                )
-            )
+        SuppressionRepository(self.db).insert_if_absent(
+            self.contact.normalized_phone_number,
+            source=SuppressionSource.AGENT_IN_CALL,
+            reason="opt-out during AI conversation",
+            contact_id=self.contact.id,
+        )
         self.contact.status = ContactStatus.CLOSED
 
     def _speak(self, text: str, *, generation: int) -> None:

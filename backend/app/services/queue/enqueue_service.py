@@ -41,7 +41,7 @@ MAX_ENQUEUE_PER_REQUEST = 100_000
 # worker actually claims/creates the CallAttempt, remains the final
 # protection -- this just avoids obviously re-enqueueing the same
 # contact within a short window.
-_ENQUEUE_GUARD_TTL_SECONDS = 3600
+ENQUEUE_GUARD_TTL_SECONDS = 3600
 
 _ACTOR = "api-client"
 
@@ -117,7 +117,7 @@ class QueueEnqueueService:
                             campaign_id=campaign_id, contact_id=contact_id, attempt_number=1
                         )
                         if self.queue.enqueue_once(
-                            job, enqueue_guard_key(job.idempotency_key), _ENQUEUE_GUARD_TTL_SECONDS
+                            job, enqueue_guard_key(job.idempotency_key), ENQUEUE_GUARD_TTL_SECONDS
                         ):
                             enqueued += 1
                         else:

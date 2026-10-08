@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import NotFoundError, ValidationError
 from app.core.request_context import current_request_id
 from app.models.campaign import Campaign
@@ -13,6 +14,7 @@ from app.models.enums import CampaignStatus
 from app.repositories.campaign_repository import CampaignRepository
 from app.schemas.campaign import CampaignCreate, CampaignUpdate
 from app.services.audit_service import record_audit_event
+from app.services.retry_policy_service import ensure_policy
 
 _ACTOR = "api-client"
 
@@ -42,8 +44,16 @@ class CampaignService:
         self.resumed = False
 
     def create_campaign(self, data: CampaignCreate) -> Campaign:
-        campaign = Campaign(name=data.name)
+        settings = get_settings()
+        campaign = Campaign(
+            name=data.name,
+            timezone=data.timezone or settings.default_timezone,
+            default_region=data.default_region or settings.default_region,
+        )
         campaign = self.campaigns.add(campaign)
+        # CP14 (C5b): the policy is born with the campaign, in the same transaction, so a
+        # campaign can never exist without its calling window and retry rules.
+        ensure_policy(self.db, campaign.id)
         record_audit_event(
             self.db,
             actor=self.actor,
@@ -79,6 +89,18 @@ class CampaignService:
                 entity_type="campaign",
                 entity_id=campaign.id,
                 metadata={"field": "name"},
+            )
+
+        if data.timezone is not None and data.timezone != campaign.timezone:
+            previous = campaign.timezone
+            campaign.timezone = data.timezone
+            record_audit_event(
+                self.db,
+                actor=self.actor,
+                action="campaign.updated",
+                entity_type="campaign",
+                entity_id=campaign.id,
+                metadata={"field": "timezone", "before": previous, "after": data.timezone},
             )
 
         if data.status is not None and data.status != campaign.status:

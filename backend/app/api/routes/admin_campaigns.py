@@ -18,11 +18,13 @@ from app.models.enums import CampaignStatus
 from app.schemas.admin import CampaignDetail, CampaignListItem
 from app.schemas.campaign import CampaignResponse, CampaignUpdate
 from app.schemas.pagination import Page
+from app.schemas.retry_policy import RetryPolicyResponse, RetryPolicyUpdate
 from app.services.admin.auth import AdminPrincipal
 from app.services.admin.campaign_service import get_campaign_detail, list_campaigns
 from app.services.campaign_service import CampaignService
 from app.services.queue.enqueue_service import requeue_after_resume
 from app.services.queue.factory import get_queue
+from app.services.retry_policy_service import RetryPolicyService
 
 router = APIRouter(prefix="/api/v1/admin/campaigns", tags=["Admin Campaigns"])
 
@@ -67,3 +69,30 @@ def transition_campaign_status(
         db.commit()  # the durable ACTIVE state first; only then touch Redis (CP12-B)
         requeue_after_resume(db, get_queue(), campaign_id, actor=principal.username)
     return CampaignResponse.model_validate(campaign)
+
+
+@router.get(
+    "/{campaign_id}/retry-policy",
+    response_model=RetryPolicyResponse,
+    dependencies=[Depends(require_admin)],
+)
+def get_retry_policy(
+    campaign_id: uuid.UUID, db: Session = Depends(get_db)
+) -> RetryPolicyResponse:
+    """CP14: any role may read it. `persisted: false` means the campaign has no stored row
+    and this is the DEFAULT policy that is in force."""
+    return RetryPolicyService(db, actor="reader").get(campaign_id)
+
+
+@router.put(
+    "/{campaign_id}/retry-policy",
+    response_model=RetryPolicyResponse,
+    dependencies=[MUTATION_LIMIT],
+)
+def put_retry_policy(
+    campaign_id: uuid.UUID,
+    data: RetryPolicyUpdate,
+    db: Session = Depends(get_db),
+    principal: AdminPrincipal = Depends(require_role("admin")),
+) -> RetryPolicyResponse:
+    return RetryPolicyService(db, actor=principal.username).put(campaign_id, data)

@@ -30,20 +30,26 @@ from app.models.enums import (
     ContactStatus,
     NeverConnectedFailureReason,
 )
-from app.models.retry_policy import RetryPolicy
 from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
-from app.services import kill_switch
+from app.services import outbound_gate
 from app.services.audit_service import record_audit_event
+from app.services.calling_window import InvalidTimezoneError, NoDialableWindowError
 from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.enqueue_service import enqueue_guard_key
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.recovery.factory import get_recovery_scheduler
+from app.services.recovery.job import RecoveryJob
 from app.services.recovery.manager import RecoveryManager
+from app.services.retry_policy_service import (
+    get_effective_policy,
+    next_open_time,
+    window_is_open,
+)
 from app.services.telephony.base import ProviderOutcome, TelephonyProvider
 from app.services.telephony.circuit_breaker import CircuitBreaker
 from app.services.telephony.dograh_outcome import (
@@ -106,7 +112,35 @@ class JobOutcome:
     #                            UNACKED in the pending list, re-driven by the normal reclaim.
     CAMPAIGN_PAUSED = "campaign_paused"
     CAMPAIGN_PAUSED_HELD = "campaign_paused_held"
+    # CP14 (C5a): the campaign's calling window is closed. "Not now", never "not eligible"
+    # (NOT_ELIGIBLE is acked and used to drop the job). OUTSIDE_WINDOW is what _dial reports;
+    # the settle step turns it into one of the two dispositions:
+    #   WINDOW_DEFERRED -- the job now lives in the recovery scheduler, due at the next
+    #                      opening (and, for a first attempt, PostgreSQL can still rebuild
+    #                      it); the stream message is acked.
+    #   WINDOW_HELD     -- anything that cannot be moved safely: left UNACKED in the
+    #                      pending list, re-driven by the normal reclaim.
+    OUTSIDE_WINDOW = "outside_window"
+    WINDOW_DEFERRED = "window_deferred"
+    WINDOW_HELD = "window_held"
+    # CP14: the daily dial/spend budget is exhausted or unreadable (fail closed). Left
+    # UNACKED, no admission slot taken, no attempt claimed, no retry budget consumed.
+    BUDGET_BLOCKED = "budget_blocked"
     NO_JOB = "no_job"
+
+
+def _utcnow() -> datetime:
+    """The dialer's clock for window and budget decisions (tests inject a fake one)."""
+    return datetime.now(UTC)
+
+
+def _gate_outcome(db: Session, reason: str) -> str:
+    """Map an outbound-gate reason to its job outcome (both are left UNACKED)."""
+    if outbound_gate.is_budget_reason(reason):
+        if reason == "budget_unavailable":
+            db.rollback()  # a failed read leaves the session unusable until rolled back
+        return JobOutcome.BUDGET_BLOCKED
+    return JobOutcome.OUTBOUND_BLOCKED
 
 
 _BLOCKED_POLL_LOG_INTERVAL_SECONDS = 60.0
@@ -132,16 +166,17 @@ def process_one_job(
     consumer_name: str,
     block_ms: int = 1000,
 ) -> str:
-    # CP11 kill switch, stage 0: do not even READ a job while outbound is blocked.
+    # CP11 kill switch (CP14: and the daily budget), stage 0: do not even READ a job while
+    # outbound is blocked.
     # A job that is read but not processed sits in the consumer group's pending list, and
     # that list is only re-driven 10 jobs per ~50 loop iterations (queue.reclaim_stale).
     # Pulling a whole backlog into it during a freeze would turn "resume" into a crawl.
     # Unread jobs stay in the stream and are consumed at full speed once it is off.
     # Stages 1 and 2 below remain the safety net for a switch flipped after the read.
-    if (reason := kill_switch.block_reason()) is not None:
+    if (reason := outbound_gate.block_reason(db, _utcnow())) is not None:
         _log_blocked_poll(reason)
         time.sleep(block_ms / 1000)  # same pacing as an empty blocking read: no hot loop
-        return JobOutcome.OUTBOUND_BLOCKED
+        return _gate_outcome(db, reason)
 
     read = queue.read_one(consumer_name, block_ms)
     if read is None:
@@ -156,7 +191,9 @@ _LEFT_UNACKED = frozenset(
         JobOutcome.IN_FLIGHT,
         JobOutcome.RECONCILE_DEFERRED,
         JobOutcome.OUTBOUND_BLOCKED,
+        JobOutcome.BUDGET_BLOCKED,
         JobOutcome.CAMPAIGN_PAUSED_HELD,
+        JobOutcome.WINDOW_HELD,
     }
 )
 
@@ -222,6 +259,98 @@ def _settle_paused(db: Session, queue: RedisStreamQueue, message_id: str, job: D
     return outcome
 
 
+def _closed_window(
+    db: Session, job: DialJob, now: datetime
+) -> tuple[bool, datetime | None]:
+    """(closed, next_opening). `closed` is True when the campaign's window is shut at `now`
+    -- or cannot be evaluated at all (corrupt timezone, window that never overlaps the hard
+    bound), in which case next_opening is None: never dial on a guess, never drop the job."""
+    campaign = db.get(Campaign, uuid.UUID(job.campaign_id))
+    if campaign is None or campaign.status != CampaignStatus.ACTIVE:
+        return False, None  # not a window question; _dial resolves it
+    policy = get_effective_policy(db, campaign)
+    try:
+        if window_is_open(campaign, policy, now):
+            return False, None
+        return True, next_open_time(campaign, policy, now)
+    except (InvalidTimezoneError, NoDialableWindowError):
+        logger.error("calling_window_unresolvable", extra={"campaign_id": job.campaign_id})
+        return True, None
+
+
+def _settle_outside_window(
+    db: Session,
+    queue: RedisStreamQueue,
+    message_id: str,
+    job: DialJob,
+    due_at: datetime | None,
+) -> str:
+    """What happens to a job read while its calling window is closed. Nothing is dialed and
+    no attempt row, attempt count or retry state is touched. The order is the CP12-B one --
+    make the job exist in its new home FIRST, release the old one SECOND -- so a crash at any
+    point leaves it in at least one place (the stream message stays pending until acked)."""
+    from app.services.recovery.factory import get_recovery_scheduler
+
+    contact = db.execute(
+        select(Contact.status, Contact.attempt_count).where(
+            Contact.id == uuid.UUID(job.contact_id)
+        )
+    ).one_or_none()
+    already_dialed = db.execute(
+        select(CallAttempt.provider_call_id).where(
+            CallAttempt.contact_id == uuid.UUID(job.contact_id),
+            CallAttempt.attempt_number == job.attempt_number,
+        )
+    ).scalar_one_or_none()
+    rebuildable = (
+        job.attempt_number == 1
+        and job.recovery_type is None
+        and contact is not None
+        and contact.status == ContactStatus.PENDING
+        and contact.attempt_count == 0
+    )
+
+    if rebuildable and due_at is not None:
+        get_recovery_scheduler().schedule_dial(job, due_at)  # 1. it exists in the scheduler
+        queue.redis.delete(enqueue_guard_key(job.idempotency_key))  # 2. Postgres can rebuild it
+        queue.ack(message_id)  # 3. only now is the stream reference released
+        outcome = JobOutcome.WINDOW_DEFERRED
+    elif already_dialed is not None:
+        queue.ack(message_id)  # duplicate delivery of a call that was already placed
+        outcome = JobOutcome.ALREADY_PROCESSED
+    elif job.recovery_type is not None and job.previous_attempt_id and due_at is not None:
+        # A retry that arrived just after the window closed goes back to the scheduler, the
+        # same home it came from.
+        get_recovery_scheduler().schedule(
+            RecoveryJob(
+                job_id=job.job_id,
+                attempt_id=job.previous_attempt_id,
+                contact_id=job.contact_id,
+                campaign_id=job.campaign_id,
+                attempt_number=job.attempt_number,
+                recovery_type=job.recovery_type,
+                idempotency_key=job.idempotency_key,
+                scheduled_at=_utcnow().isoformat(),
+                trace_id=job.trace_id,
+            ),
+            due_at,
+        )
+        queue.ack(message_id)
+        outcome = JobOutcome.WINDOW_DEFERRED
+    else:
+        outcome = JobOutcome.WINDOW_HELD  # left unacked, re-driven by the normal reclaim
+    logger.info(
+        "job_blocked_outside_window",
+        extra={
+            "job_id": job.job_id,
+            "trace_id": job.trace_id,
+            "campaign_id": job.campaign_id,
+            "disposition": outcome,
+        },
+    )
+    return outcome
+
+
 def process_claimed_job(
     db: Session,
     queue: RedisStreamQueue,
@@ -258,18 +387,25 @@ def process_claimed_job(
 
     # CP11 kill switch, stage 1: checked before admission so a blocked job never
     # consumes a concurrency/CPS slot. Stage 2 (the one that matters) is in _dial.
-    if (reason := kill_switch.block_reason()) is not None:
+    if (reason := outbound_gate.block_reason(db, _utcnow())) is not None:
         logger.warning(
             "outbound_blocked",
             extra={"job_id": job.job_id, "trace_id": job.trace_id, "reason": reason},
         )
-        return JobOutcome.OUTBOUND_BLOCKED  # left unacked on purpose: job stays queued
+        return _gate_outcome(db, reason)  # left unacked on purpose: job stays queued
 
     # CP12-B: durable campaign pause, checked before admission so a paused job never takes a
     # concurrency lease or CPS slot. The same check inside _dial covers a pause that lands
     # after this read (that path releases the lease it already holds).
     if _campaign_is_paused(db, job.campaign_id):
         return _settle_paused(db, queue, message_id, job)
+
+    # CP14: a closed calling window is also settled BEFORE admission, otherwise a backlog
+    # read after the window closed would spend CPS/concurrency slots just to be deferred.
+    # The authoritative check is still the final eligibility inside _dial.
+    closed, due_at = _closed_window(db, job, _utcnow())
+    if closed:
+        return _settle_outside_window(db, queue, message_id, job, due_at)
 
     # CP12-A: the concurrency slot is a lease keyed by the job's idempotency key (one logical
     # attempt = one slot; the CallAttempt row does not exist yet at admission). It is released
@@ -308,6 +444,9 @@ def process_claimed_job(
         admission.release(lease)
     if outcome == JobOutcome.CAMPAIGN_PAUSED:  # paused after the early check; lease released
         return _settle_paused(db, queue, message_id, job)
+    if outcome == JobOutcome.OUTSIDE_WINDOW:  # the window closed after the early check
+        _, due_at = _closed_window(db, job, _utcnow())
+        return _settle_outside_window(db, queue, message_id, job, due_at)
     if outcome not in _LEFT_UNACKED:
         queue.ack(message_id)
     return outcome
@@ -353,14 +492,12 @@ def _dial(
     if campaign.status == CampaignStatus.PAUSED:
         return JobOutcome.CAMPAIGN_PAUSED
 
-    retry_policy = db.execute(
-        select(RetryPolicy).where(RetryPolicy.campaign_id == campaign.id)
-    ).scalar_one_or_none()
-
     eligibility = DialEligibilityService(suppressions).check(
-        contact, campaign, retry_policy, now=datetime.now(UTC)
+        contact, campaign, get_effective_policy(db, campaign), now=_utcnow()
     )
     if not eligibility.eligible:
+        if eligibility.transient:
+            return JobOutcome.OUTSIDE_WINDOW  # "not now": settled, never acked-and-lost
         logger.info(
             "dial_not_eligible",
             extra={"job_id": job.job_id, "reason": eligibility.reason},
@@ -383,12 +520,16 @@ def _dial(
     # misread. Residual race: a switch flipped after this read but before the HTTP
     # trigger below still lets that one in-flight trigger through -- the check and the
     # external call cannot be atomic. The window is one DB commit plus one HTTP request.
-    if (reason := kill_switch.block_reason()) is not None:
+    if (reason := outbound_gate.block_reason(db, _utcnow())) is not None:
         logger.warning(
             "outbound_blocked",
             extra={"job_id": job.job_id, "trace_id": job.trace_id, "reason": reason},
         )
-        return JobOutcome.OUTBOUND_BLOCKED
+        # CP14: the budget is part of this same final gate (and fails closed). Both leave
+        # the job unacked with no attempt claimed, so no retry budget is consumed.
+        return JobOutcome.BUDGET_BLOCKED if outbound_gate.is_budget_reason(
+            reason
+        ) else JobOutcome.OUTBOUND_BLOCKED
 
     attempt, created = attempts.get_or_create(contact.id, job.attempt_number)
 

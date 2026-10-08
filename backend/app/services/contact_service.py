@@ -11,7 +11,9 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import ContactStatus
 from app.repositories.campaign_repository import CampaignRepository
@@ -19,7 +21,7 @@ from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.audit_service import record_audit_event
-from app.services.phone import InvalidPhoneNumberError, normalize_phone_number
+from app.services.phone import InvalidPhoneError, normalize_phone
 
 # Placeholder actor until Checkpoint 02's Step 29 note is resolved by a
 # real auth system: "keep endpoint design ready for it without creating
@@ -40,20 +42,17 @@ class ContactService:
         if campaign is None:
             raise NotFoundError(f"Campaign {data.campaign_id} not found")
 
-        normalized = self._validate_and_normalize(data.phone_number)
+        normalized = self._validate_and_normalize(data.phone_number, campaign)
 
         if self.suppressions.is_suppressed(normalized):
-            raise ConflictError(
-                f"Phone number {normalized} is suppressed and cannot be added"
-            )
+            raise ConflictError("Phone number is suppressed and cannot be added")
 
         existing = self.contacts.get_by_campaign_and_normalized_phone(
             data.campaign_id, normalized
         )
         if existing is not None:
             raise ConflictError(
-                f"Contact with phone number {normalized} already exists in "
-                f"campaign {data.campaign_id}"
+                f"Contact with this phone number already exists in campaign {data.campaign_id}"
             )
 
         contact = Contact(
@@ -95,14 +94,16 @@ class ContactService:
         changed = False
 
         if data.phone_number is not None:
-            normalized = self._validate_and_normalize(data.phone_number)
+            campaign = self.campaigns.get_by_id(contact.campaign_id)
+            assert campaign is not None  # FK guarantees it
+            normalized = self._validate_and_normalize(data.phone_number, campaign)
             if normalized != contact.normalized_phone_number:
                 existing = self.contacts.get_by_campaign_and_normalized_phone(
                     contact.campaign_id, normalized
                 )
                 if existing is not None and existing.id != contact.id:
                     raise ConflictError(
-                        f"Contact with phone number {normalized} already exists "
+                        "Contact with this phone number already exists "
                         f"in campaign {contact.campaign_id}"
                     )
                 contact.phone_number = data.phone_number
@@ -136,8 +137,12 @@ class ContactService:
         )
         return contact
 
-    def _validate_and_normalize(self, phone_number: str) -> str:
+    @staticmethod
+    def _validate_and_normalize(phone_number: str, campaign: Campaign) -> str:
         try:
-            return normalize_phone_number(phone_number)
-        except InvalidPhoneNumberError as exc:
-            raise ValidationError(str(exc)) from exc
+            return normalize_phone(
+                phone_number, campaign.default_region, get_settings().allowed_dial_regions
+            ).e164
+        except InvalidPhoneError as exc:
+            # The reason code only -- the number itself never goes into a message or a log.
+            raise ValidationError(f"Invalid phone number ({exc.code})") from None
