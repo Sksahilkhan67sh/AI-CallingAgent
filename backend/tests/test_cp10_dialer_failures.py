@@ -176,6 +176,7 @@ def test_configuration_error_is_audited_and_does_not_strand_the_contact(
     assert _events(db_session, attempt)["DOGRAH_CONFIGURATION_ERROR"].payload == {
         "status_code": None,
         "category": "configuration_error",
+        "reason_key": "provider_configuration_error",
     }
     db_session.refresh(contact)
     assert contact.status != ContactStatus.DIALING  # handed to RecoveryManager, not stuck
