@@ -348,7 +348,11 @@ def test_7_8_concurrent_workers_adopting_one_run_dial_nothing_and_adopt_once(
 def test_9_non_ambiguous_failure_never_triggers_any_lookup(fake, redis_client, provider):
     campaign_id, (contact_id,) = _world()
     queue, admission = _queue(redis_client, "g9"), _admission(redis_client)
-    fake.error = DograhApiError(400, "bad", category=DograhErrorCategory.VALIDATION_ERROR)
+    # a definite, retryable failure (503). A 400 would now be terminal (CP13) and leave
+    # nothing to retry.
+    fake.error = DograhApiError(
+        503, "unavailable", category=DograhErrorCategory.PROVIDER_UNAVAILABLE
+    )
     queue.enqueue(DialJob.new(campaign_id=campaign_id, contact_id=contact_id, attempt_number=1))
     assert _drive(queue, admission, provider, redis_client, *queue.read_one("w1", 100))
     sc = Scenario(queue, admission, campaign_id, contact_id)

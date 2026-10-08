@@ -13,14 +13,20 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import CallEvent
-from app.models.enums import CampaignStatus, ContactStatus
+from app.models.enums import (
+    CallAttemptState,
+    CampaignStatus,
+    ContactStatus,
+    NeverConnectedFailureReason,
+)
 from app.models.retry_policy import RetryPolicy
 from app.repositories.suppression_repository import SuppressionRepository
 from app.services.analysis.admission import enqueue_call_analysis
@@ -31,6 +37,12 @@ from app.services.recovery.scheduler import RecoveryScheduler
 logger = logging.getLogger("recovery")
 
 _ACTOR = "recovery-manager"
+
+# CP13: a Dograh 429 is retried under the campaign's existing `provider_error` rule, so an
+# operator who turned provider-error retries off turns rate-limit retries off too.
+_RULE_ALIASES = {"provider_rate_limited": "provider_error"}
+# CP13 (H1): reason keys that spend the per-contact Dograh provider-error budget.
+_PROVIDER_BUDGET_REASONS = frozenset({"provider_error", "provider_rate_limited"})
 
 
 @dataclass
@@ -55,9 +67,14 @@ class RecoveryManager:
         *,
         never_connected: bool,
         reason_key: str,
+        retry_after_seconds: int | None = None,
     ) -> RecoveryDecision:
         """§8: opt-out/suppression always wins, checked first and
-        independent of the disconnect reason itself."""
+        independent of the disconnect reason itself.
+
+        `retry_after_seconds` (CP13) is a provider hint, already bounded by the caller. It can
+        only LENGTHEN the policy's own spacing, never shorten it, and the dispatcher still
+        re-checks suppression, pause, campaign state and the calling window when it fires."""
         if contact.status == ContactStatus.CLOSED or self.suppressions.is_suppressed(
             contact.normalized_phone_number
         ):
@@ -70,7 +87,9 @@ class RecoveryManager:
             select(RetryPolicy).where(RetryPolicy.campaign_id == campaign.id)
         ).scalar_one_or_none()
 
-        decision = self._decide(call_attempt, retry_policy, never_connected, reason_key)
+        decision = self._decide(
+            call_attempt, retry_policy, never_connected, reason_key, retry_after_seconds
+        )
 
         if decision.should_retry:
             self._schedule(call_attempt, contact, campaign, decision)
@@ -87,6 +106,7 @@ class RecoveryManager:
         retry_policy: RetryPolicy | None,
         never_connected: bool,
         reason_key: str,
+        retry_after_seconds: int | None = None,
     ) -> RecoveryDecision:
         if retry_policy is None:
             # No policy configured for this campaign -- conservative
@@ -96,10 +116,17 @@ class RecoveryManager:
         rules = (
             retry_policy.never_connected_rules if never_connected else retry_policy.mid_call_rules
         )
-        if not rules.get(reason_key, False):
+        if not rules.get(_RULE_ALIASES.get(reason_key, reason_key), False):
             return RecoveryDecision(
                 should_retry=False, reason=f"reason_not_retryable:{reason_key}"
             )
+
+        if never_connected and reason_key in _PROVIDER_BUDGET_REASONS:
+            budget = get_settings().dograh_provider_error_max_retries
+            if self._provider_error_failures(call_attempt) > budget:
+                return RecoveryDecision(
+                    should_retry=False, reason="provider_error_budget_exhausted"
+                )
 
         if call_attempt.attempt_number > retry_policy.max_retries:
             return RecoveryDecision(should_retry=False, reason="max_attempts_reached")
@@ -109,12 +136,33 @@ class RecoveryManager:
             return RecoveryDecision(should_retry=False, reason="max_attempts_reached")
 
         delay_seconds = retry_policy.retry_spacing_seconds[spacing_index]
+        if retry_after_seconds is not None and retry_after_seconds > 0:
+            # Clamped again here: this class must not depend on every caller having
+            # remembered to bound an untrusted provider value.
+            cap = get_settings().dograh_retry_after_max_seconds
+            delay_seconds = max(delay_seconds, min(retry_after_seconds, cap))
         return RecoveryDecision(
             should_retry=True,
             reason="scheduled",
             delay_seconds=delay_seconds,
             next_attempt_number=call_attempt.attempt_number + 1,
         )
+
+    def _provider_error_failures(self, call_attempt: CallAttempt) -> int:
+        """Provider-originated never-connected failures this contact has accumulated,
+        including the attempt being decided. Read from the durable CallAttempt rows, so the
+        budget survives a restart and cannot be double-spent by a duplicate event."""
+        return self.db.execute(
+            select(func.count())
+            .select_from(CallAttempt)
+            .where(
+                CallAttempt.contact_id == call_attempt.contact_id,
+                CallAttempt.provider == "dograh",
+                CallAttempt.state == CallAttemptState.FAILED_TO_CONNECT,
+                CallAttempt.connection_failure_reason == NeverConnectedFailureReason.PROVIDER_ERROR,
+                CallAttempt.attempt_number <= call_attempt.attempt_number,
+            )
+        ).scalar_one()
 
     # -- effects ----------------------------------------------------
 

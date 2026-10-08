@@ -1,6 +1,6 @@
 """Checkpoint 09 follow-up -- Dograh publishes NO call_status enum
 ("observed reason the call ended", docs.dograh.com/developer/webhooks),
-so classification is an explicit, small, visible keyword heuristic.
+so (CP13) classification is an exact table of the values Dograh's source can emit.
 These tests pin every supported keyword AND the conservative fallback:
 an unrecognized status must never be treated as a connected conversation
 and must never skip recovery.
@@ -23,72 +23,64 @@ from app.models.enums import (
 )
 from app.models.retry_policy import RetryPolicy
 from app.services.phone import normalize_phone_number
-from app.services.telephony.dograh_webhook_service import (
-    _DROPPED_MID_CALL_KEYWORDS,
-    _NEVER_CONNECTED_KEYWORDS,
-    _NORMAL_COMPLETION_TOKENS,
-    _classify,
-)
+from app.services.telephony.dograh_outcome import _VOCABULARY, classify_call_outcome
 
 S = CallAttemptState
 
+# Every `call_status` Dograh can emit, taken from its source (TelephonyCallStatus in
+# dograh-hq/dograh api/enums.py + EndTaskReason in dograh-hq/pipecat). Source-verified, not
+# live-verified. Pinning the whole list means a new Dograh value shows up as a failing test.
+_ENDED = [
+    "completed", "user_hangup", "end_call", "call_transferred", "transfer_call",
+    "call_duration_exceeded", "user_idle_max_duration_exceeded",
+]  # fmt: skip
+_NEVER = ["busy", "no-answer", "voicemail_detected", "failed", "canceled", "error"]
+_DROPPED = ["unexpected_error", "pipeline_error", "system_cancelled"]
+_NON_FINAL = ["initiated", "ringing", "in-progress", "answered"]
 
-@pytest.mark.parametrize("keyword,reason", _NEVER_CONNECTED_KEYWORDS)
-def test_every_never_connected_keyword(keyword, reason):
-    c = _classify(f"call_{keyword}")
-    assert (c.state, c.never_connected_reason, c.recognized) == (S.FAILED_TO_CONNECT, reason, True)
+
+def test_vocabulary_is_exactly_the_documented_dograh_values():
+    documented = {s.replace("-", "_") for s in _ENDED + _NEVER + _DROPPED + _NON_FINAL}
+    assert set(_VOCABULARY) == documented
 
 
-@pytest.mark.parametrize("keyword", _DROPPED_MID_CALL_KEYWORDS)
-def test_every_dropped_mid_call_keyword(keyword):
-    c = _classify(f"call_{keyword}")
+@pytest.mark.parametrize("status", _ENDED)
+def test_ended_values_are_a_finished_conversation(status):
+    c = classify_call_outcome(status, None)
+    assert (c.state, c.recognized, c.non_final) == (S.ENDED_NORMALLY, True, False)
+
+
+@pytest.mark.parametrize("status", _NEVER)
+def test_never_connected_values(status):
+    c = classify_call_outcome(status, None)
+    assert (c.state, c.recognized) == (S.FAILED_TO_CONNECT, True)
+    assert c.never_connected_reason is not None
+
+
+@pytest.mark.parametrize("status", _DROPPED)
+def test_dropped_values(status):
+    c = classify_call_outcome(status, None)
     assert (c.state, c.recognized) == (S.DROPPED_MID_CALL, True)
     assert c.mid_call_reason is not None
 
 
-@pytest.mark.parametrize("token", sorted(_NORMAL_COMPLETION_TOKENS))
-@pytest.mark.parametrize("fmt", ["{}", "user_{}", "AGENT-{}", "{} by caller"])
-def test_every_normal_token_matches_as_whole_token(token, fmt):
-    c = _classify(fmt.format(token))
-    assert (c.state, c.recognized) == (S.ENDED_NORMALLY, True)
-
-
-@pytest.mark.parametrize("value", ["network_error_drop", "connection_drop"])
-def test_network_keywords_map_to_network_problem(value):
-    from app.models.enums import MidCallDisconnectReason
-
-    c = _classify(value)
-    assert c.state == S.DROPPED_MID_CALL
-    assert c.mid_call_reason == MidCallDisconnectReason.NETWORK_PROBLEM
+@pytest.mark.parametrize("status", _NON_FINAL)
+def test_non_final_values_never_decide(status):
+    assert classify_call_outcome(status, None).non_final is True
 
 
 @pytest.mark.parametrize(
     "value",
     [
-        None,
-        "",
-        "   ",
-        "unknown",
-        "fail",
-        "failed",
-        "failure",
-        "canceled",
-        "cancelled",
-        "incomplete",  # must NOT match the "complete" token
-        "unsuccessful",  # must NOT match the "success" token
-        "some_new_dograh_value",
+        None, "", "   ", "unknown", "fail", "failure", "cancelled", "incomplete",
+        "unsuccessful", "some_new_dograh_value", "call_completed_ok",
     ],
-)
+)  # fmt: skip
 def test_ambiguous_or_unknown_is_never_a_connected_conversation(value):
-    c = _classify(value)
+    c = classify_call_outcome(value, None)
     assert c.recognized is False
     assert c.state == S.FAILED_TO_CONNECT  # not ENDED_NORMALLY: never claim it connected
     assert c.never_connected_reason == NeverConnectedFailureReason.PROVIDER_ERROR
-
-
-@pytest.mark.parametrize("value", ["completed_with_error", "call completed, timeout"])
-def test_failure_keywords_outrank_a_normal_token(value):
-    assert _classify(value).state == S.DROPPED_MID_CALL
 
 
 # -- end to end: the unrecognized path goes ONLY through RecoveryManager --
@@ -127,9 +119,7 @@ def _post(client, attempt, run_id, status):
     )
 
 
-def test_unrecognized_status_is_audited_creates_no_session_and_uses_recovery(
-    client, db_session
-):
+def test_unrecognized_status_is_audited_creates_no_session_and_uses_recovery(client, db_session):
     contact, attempt = _attempt(db_session, "555-961-0001")
 
     response = _post(client, attempt, 77, "mystery_status")
@@ -139,7 +129,9 @@ def test_unrecognized_status_is_audited_creates_no_session_and_uses_recovery(
     db_session.refresh(attempt)
     db_session.refresh(contact)
     assert attempt.state == CallAttemptState.FAILED_TO_CONNECT  # never claimed connected
-    assert contact.status == ContactStatus.RETRY_SCHEDULED  # recovery was NOT skipped
+    # Recovery decided (it was not skipped); for an unknown status it decides NOT to redial,
+    # because the call may well have happened. CP13 policy, see CHECKPOINT-13-NOTES.md.
+    assert contact.status == ContactStatus.COMPLETED_PARTIAL
     assert (
         db_session.query(ConversationSession)
         .filter(ConversationSession.call_attempt_id == attempt.id)

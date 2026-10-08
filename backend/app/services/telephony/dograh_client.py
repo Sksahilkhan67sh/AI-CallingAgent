@@ -13,6 +13,7 @@ import enum
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -61,14 +62,49 @@ _RECONCILE_MAX_PAGES = 5
 _RECONCILE_WINDOW_PADDING = timedelta(seconds=60)  # clock skew between us and Dograh
 
 
+def parse_retry_after(
+    value: str | None, *, max_seconds: int, now: datetime | None = None
+) -> int | None:
+    """CP13: a provider-supplied Retry-After is untrusted input. Accepts delta-seconds or an
+    HTTP-date (RFC 9110 §10.2.3); returns whole seconds clamped to [0, max_seconds], or None
+    when the header is absent or unusable (malformed, negative, non-finite) so the caller
+    falls back to its own configured backoff. Never raises."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text or len(text) > 64:
+        return None
+    if text.isascii() and text.isdigit():
+        return min(int(text), max_seconds)
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    delta = (when - (now or datetime.now(UTC))).total_seconds()
+    if delta < 0:
+        return None
+    return min(int(delta), max_seconds)
+
+
 class DograhApiError(Exception):
     def __init__(
-        self, status_code: int, message: str, *, category: DograhErrorCategory
+        self,
+        status_code: int,
+        message: str,
+        *,
+        category: DograhErrorCategory,
+        retry_after_seconds: int | None = None,
     ) -> None:
         super().__init__(f"Dograh API error {status_code} [{category.value}]: {message}")
         self.status_code = status_code
         self.message = message
         self.category = category
+        # CP13: already bounded by parse_retry_after; only ever set on a 429.
+        self.retry_after_seconds = retry_after_seconds
 
     @property
     def is_ambiguous(self) -> bool:
@@ -88,6 +124,11 @@ class DograhTriggerResult:
 
 
 def _classify_status_code(status_code: int) -> DograhErrorCategory:
+    if status_code == 408:
+        # CP13: a request-timeout answer comes from a proxy/gateway that gave up waiting, so
+        # the application tier may have processed the trigger. Same "response lost" case as a
+        # read timeout: reconcile, never blindly retry. (Was a plain validation error.)
+        return DograhErrorCategory.AMBIGUOUS_REQUEST
     if status_code in (401, 403):
         return DograhErrorCategory.AUTHENTICATION_ERROR
     if status_code == 429:
@@ -115,6 +156,7 @@ class DograhClient:
         mode: str = "test",
         connect_timeout: float = 5.0,
         read_timeout: float = 15.0,
+        retry_after_max_seconds: int = 3600,
     ) -> None:
         if not api_key or not trigger_uuid:
             raise DograhConfigurationError(
@@ -125,6 +167,7 @@ class DograhClient:
         self.api_key = api_key
         self.trigger_uuid = trigger_uuid
         self.mode = mode
+        self.retry_after_max_seconds = retry_after_max_seconds
         # §1.2: bounded, separately-configurable connect vs. read
         # timeouts -- never a single unbounded call. httpx.Timeout's
         # `write`/`pool` phases are pinned to the connect timeout too,
@@ -197,8 +240,18 @@ class DograhClient:
 
         if response.status_code >= 400:
             detail = _extract_detail(response)
+            retry_after = (
+                parse_retry_after(
+                    response.headers.get("Retry-After"), max_seconds=self.retry_after_max_seconds
+                )
+                if response.status_code == 429
+                else None
+            )
             raise DograhApiError(
-                response.status_code, detail, category=_classify_status_code(response.status_code)
+                response.status_code,
+                detail,
+                category=_classify_status_code(response.status_code),
+                retry_after_seconds=retry_after,
             )
 
         return response

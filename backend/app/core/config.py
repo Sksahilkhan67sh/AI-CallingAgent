@@ -155,6 +155,20 @@ class Settings(BaseSettings):
     # same "env-configured secret, dev-only-insecure default"
     # convention as telephony_webhook_secret.
     dograh_webhook_secret: str = "dev-only-insecure-dograh-webhook-secret-change-me"
+    # CP13: dispositions that mean "this person asked not to be called again". Dograh
+    # publishes no fixed code (call dispositions are per-workflow, opt-in); `do_not_call` is
+    # the code its own docs suggest as a starter outcome. Exact match only, never a
+    # substring. An empty list disables provider-driven suppression.
+    dograh_opt_out_dispositions: list[str] = ["do_not_call"]
+    # CP13: a provider-supplied Retry-After is untrusted -- never wait longer than this.
+    dograh_retry_after_max_seconds: int = 3600
+    # CP13 (H1): how many Dograh provider-error failures one contact may accumulate before
+    # RecoveryManager stops retrying it. Counted from durable CallAttempt rows, and always in
+    # addition to the campaign RetryPolicy.max_retries bound (the lower of the two wins).
+    dograh_provider_error_max_retries: int = 2
+    # CP13: how many times a retry may be deferred because the Dograh reconciliation lookup
+    # itself failed, before the retry is abandoned (no dial) rather than polled forever.
+    dograh_reconcile_max_deferrals: int = 5
 
     # --- Rate limiting (Checkpoint 09 §8.5) ---
     login_rate_limit_per_minute: int = 10
@@ -225,6 +239,15 @@ class Settings(BaseSettings):
             problems.append(
                 "DOGRAH_CONNECT_TIMEOUT_SECONDS and DOGRAH_READ_TIMEOUT_SECONDS must be > 0"
             )
+
+        if self.dograh_retry_after_max_seconds <= 0:
+            problems.append("DOGRAH_RETRY_AFTER_MAX_SECONDS must be > 0")
+        if self.dograh_provider_error_max_retries < 0:
+            problems.append("DOGRAH_PROVIDER_ERROR_MAX_RETRIES must be >= 0")
+        if self.dograh_reconcile_max_deferrals < 1:
+            problems.append("DOGRAH_RECONCILE_MAX_DEFERRALS must be >= 1")
+        if any(not code.strip() for code in self.dograh_opt_out_dispositions):
+            problems.append("DOGRAH_OPT_OUT_DISPOSITIONS must not contain empty codes")
 
         # CP12-A: a lease that can expire while its dial is still running would let a second
         # worker take the same slot. Three sequential Dograh requests (trigger + two
