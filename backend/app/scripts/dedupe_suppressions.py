@@ -47,8 +47,6 @@ def run(db: Session, *, apply: bool) -> dict:
             {"ids": [r.contact_id for r in extras]},
         )
         db.commit()
-    else:
-        db.rollback()
     return {
         "applied": apply,
         "numbers_with_duplicates": len(kept),

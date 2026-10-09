@@ -131,8 +131,6 @@ def _renormalize_contacts(
                 )
         if apply:
             db.commit()
-        else:
-            db.rollback()
 
 
 def _renormalize_suppressions(
@@ -216,8 +214,6 @@ def _renormalize_suppressions(
                 )
         if apply:
             db.commit()
-        else:
-            db.rollback()
 
 
 def run(db: Session, *, apply: bool) -> Summary:

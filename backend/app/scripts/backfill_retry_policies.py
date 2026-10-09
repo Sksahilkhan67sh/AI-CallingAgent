@@ -33,8 +33,6 @@ def run(db: Session, *, apply: bool) -> dict:
     if apply:
         created = sum(1 for campaign_id in missing if ensure_policy(db, campaign_id))
         db.commit()
-    else:
-        db.rollback()
     return {"applied": apply, "campaigns_without_policy": len(missing), "created": created}
 
 

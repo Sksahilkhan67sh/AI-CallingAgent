@@ -19,3 +19,8 @@ InvalidPhoneNumberError = InvalidPhoneError
 
 def normalize_phone_number(raw: str, region: str = "IN") -> str:
     return normalize_phone(raw, region).e164
+
+
+def valid_in(n: int) -> str:
+    """The n-th valid Indian mobile number in a fixed sequence (E.164). Unique per n."""
+    return f"+9198{n:08d}"

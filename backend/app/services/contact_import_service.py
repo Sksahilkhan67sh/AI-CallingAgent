@@ -152,5 +152,7 @@ class ContactImportService:
         if reader.fieldnames is None or "phone_number" not in reader.fieldnames:
             raise ValidationError("CSV file must have a 'phone_number' column")
 
-        for row_number, row in enumerate(reader, start=2):  # header is row 1
-            yield row_number, (row.get("phone_number") or "")
+        # line_num is the physical line, so a skipped blank line (DictReader drops them) does
+        # not shift the row numbers reported back to the operator.
+        for row in reader:
+            yield reader.line_num, (row.get("phone_number") or "")
