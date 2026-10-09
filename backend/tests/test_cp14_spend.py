@@ -8,7 +8,7 @@ and test_concurrent_dials_overshoot_by_at_most_the_number_in_flight."""
 import itertools
 import logging
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -250,25 +250,24 @@ def test_the_final_check_inside_dial_stops_a_cap_hit_after_admission(rig, monkey
     enqueue_first(rig, campaign, contact)
     message_id, job = rig.queue.read_one("w1", 50)
     answers = iter([None, spend_cap.DAILY_DIAL_CAP_REACHED])  # stage 1 open, stage 2 closed
-    monkeypatch.setattr(outbound_gate, "block_reason", lambda db, now=None: next(answers))
+    breaker = CircuitBreaker(rig.redis, rig.provider.name)
 
-    with Session() as s:
-        outcome = process_claimed_job(
-            s, rig.queue, rig.admission, rig.provider,
-            CircuitBreaker(rig.redis, rig.provider.name), message_id, job,
-        )  # fmt: skip
-        s.commit()
+    with monkeypatch.context() as gate:  # scoped: the rig's fake clock must stay patched
+        gate.setattr(outbound_gate, "block_reason", lambda db, now=None: next(answers))
+        with Session() as s:
+            outcome = process_claimed_job(
+                s, rig.queue, rig.admission, rig.provider, breaker, message_id, job
+            )
+            s.commit()
 
     assert outcome == JobOutcome.BUDGET_BLOCKED
     assert attempts_of(contact) == []  # blocked BEFORE the durable attempt claim
     assert rig.pending() == 1  # left unacked, intact
-    monkeypatch.undo()
     ((message_id, job),) = rig.queue.reclaim_stale("w2", 0)
     with Session() as s:
         resumed = process_claimed_job(
-            s, rig.queue, rig.admission, rig.provider,
-            CircuitBreaker(rig.redis, rig.provider.name), message_id, job,
-        )  # fmt: skip
+            s, rig.queue, rig.admission, rig.provider, breaker, message_id, job
+        )
         s.commit()
     assert resumed == JobOutcome.ADMITTED_AND_DIALED and len(attempts_of(contact)) == 1
 
@@ -279,13 +278,13 @@ def test_an_unreadable_budget_fails_closed(rig, monkeypatch, day):
     def broken(*_a, **_k):
         raise OperationalError("SELECT", {}, Exception("db down"))
 
-    monkeypatch.setattr(spend_cap, "compute_status", broken)
-    with Session() as s:
-        assert spend_cap.block_reason(s, ist(12, 0, day=day)) == spend_cap.BUDGET_UNAVAILABLE
-    assert rig.run_one() == JobOutcome.BUDGET_BLOCKED
-    assert all(attempts_of(c) == [] for c in ids)
-    assert rig.redis.xlen(rig.queue.stream_key) == 2 and rig.pending() == 0
-    monkeypatch.undo()
+    with monkeypatch.context() as broken_db:  # scoped: the rig's fake clock must stay patched
+        broken_db.setattr(spend_cap, "compute_status", broken)
+        with Session() as s:
+            assert spend_cap.block_reason(s, ist(12, 0, day=day)) == spend_cap.BUDGET_UNAVAILABLE
+        assert rig.run_one() == JobOutcome.BUDGET_BLOCKED
+        assert all(attempts_of(c) == [] for c in ids)
+        assert rig.redis.xlen(rig.queue.stream_key) == 2 and rig.pending() == 0
     assert rig.run_one() == JobOutcome.ADMITTED_AND_DIALED  # and it recovers by itself
 
 
@@ -342,7 +341,13 @@ def test_concurrent_dials_overshoot_by_at_most_the_number_in_flight(
     most one extra dial per concurrently running worker."""
     workers, jobs, headroom = 8, 40, 5
     campaign, ids = commit_world(
-        contacts=jobs, policy={"max_retries": 0, "retry_spacing_seconds": []}
+        contacts=jobs,
+        policy={
+            "max_retries": 0,
+            "retry_spacing_seconds": [],
+            "window_start": time(0, 0),  # explicit: this test uses the REAL clock and must
+            "window_end": time(23, 59, 59),  # not depend on the hour it happens to run at
+        },
     )
     queue, admission = make_queue(redis_client, "overshoot"), make_admission(redis_client)
     for c in ids:

@@ -441,3 +441,30 @@ def test_opt_out_is_a_no_op_when_an_operator_already_listed_the_number(db_sessio
         .where(Suppression.phone_number == "+919811100041")
     )
     assert db_session.execute(mine).scalar_one() == 1
+
+
+# -- one lookup rule on every path ---------------------------------------------------------------
+
+
+def test_every_lookup_canonicalizes_its_input_the_same_way(db_session):
+    repo = SuppressionRepository(db_session)
+    repo.insert_if_absent(
+        "09811100050", source=SuppressionSource.MANUAL_API, reason="spelled with a trunk 0"
+    )
+    spellings = ["9811100050", "09811100050", "919811100050", "+91 98111-00050", "+919811100050"]
+    for spelling in spellings:
+        assert repo.is_suppressed(spelling), spelling
+        assert repo.get_by_phone(spelling) is not None, spelling
+    # the batch lookup (used by the CP12-C enqueue page) answers in the CALLER's spelling
+    assert repo.suppressed_among(set(spellings) | {"9811100051"}) == set(spellings)
+    assert not repo.is_suppressed("9811100051")
+    # and the writer stored the canonical form, so the row is findable by it directly
+    assert repo.get_by_phone("+919811100050").phone_number == "+919811100050"
+
+
+def test_a_legacy_value_that_does_not_parse_is_still_matched_as_is(db_session):
+    # An opt-out must never be lost because a stored number looks odd: an unparseable legacy
+    # value is stored and looked up verbatim until the backfill repairs it.
+    repo = SuppressionRepository(db_session)
+    repo.insert_if_absent("+09876543299", source=SuppressionSource.MANUAL_API, reason=None)
+    assert repo.is_suppressed("+09876543299")
