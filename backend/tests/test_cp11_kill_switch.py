@@ -20,12 +20,12 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus
 from app.services import kill_switch
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import JobOutcome, process_claimed_job, process_one_job
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.telephony.circuit_breaker import CircuitBreaker
+from tests.phone_helpers import normalize_phone_number
 
 _STREAM, _GROUP = "test:ks:calls", "test:ks:workers"
 
@@ -33,7 +33,7 @@ _STREAM, _GROUP = "test:ks:calls", "test:ks:workers"
 # --- helpers ---------------------------------------------------------------
 
 
-def _setup(db_session, phone="555-700-0001"):
+def _setup(db_session, phone="989-700-0001"):
     campaign = Campaign(name="kill switch test", status=CampaignStatus.ACTIVE)
     db_session.add(campaign)
     db_session.flush()
@@ -225,7 +225,7 @@ def test_a_frozen_backlog_does_not_migrate_to_the_pending_list(
     """The reason stage 0 exists: reclaim_stale re-drives only 10 pending jobs at a time,
     so a backlog read-and-parked during a freeze would crawl after re-enable."""
     campaign, _ = _setup(db_session)
-    contacts = [_setup(db_session, phone=f"555-71{i:02d}-0001")[1] for i in range(20)]
+    contacts = [_setup(db_session, phone=f"989-{710 + i}-0001")[1] for i in range(20)]
     for contact in contacts:
         _enqueue(db_session, redis_client, campaign, contact)
     kill_switch.enable("admin", None)

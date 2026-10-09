@@ -19,12 +19,12 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import process_one_job
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.telephony.circuit_breaker import CircuitBreaker
+from tests.phone_helpers import normalize_phone_number
 
 _engine = create_engine(os.environ["PRIMARY_DB_URL"])
 _Session = sessionmaker(bind=_engine)
@@ -37,8 +37,8 @@ def test_concurrent_workers_create_exactly_one_call_attempt(redis_client, provid
     setup_session.flush()
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-700-0001",
-        normalized_phone_number=normalize_phone_number("555-700-0001"),
+        phone_number="989-700-0001",
+        normalized_phone_number=normalize_phone_number("989-700-0001"),
         status=ContactStatus.PENDING,
     )
     setup_session.add(contact)

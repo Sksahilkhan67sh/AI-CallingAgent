@@ -34,7 +34,9 @@ from app.repositories.call_attempt_repository import CallAttemptRepository
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
-from app.services import outbound_gate
+
+# kill_switch stays importable from here: tests and ops tooling patch it via this module.
+from app.services import kill_switch, outbound_gate  # noqa: F401
 from app.services.audit_service import record_audit_event
 from app.services.calling_window import InvalidTimezoneError, NoDialableWindowError
 from app.services.eligibility_service import DialEligibilityService

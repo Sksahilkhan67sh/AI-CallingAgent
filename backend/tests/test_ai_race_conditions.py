@@ -12,7 +12,7 @@ def test_duplicate_stt_final_event_does_not_duplicate_the_message(db_session):
     honest behavior for a fake with no dedup key on the transcript event
     itself; true dedup of the *same* provider event is the queue/webhook
     idempotency layer's job, exercised in Checkpoint 03's tests)."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0050")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0050")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -30,7 +30,7 @@ def test_stale_llm_response_never_overwrites_a_newer_turn(db_session):
     """Beyond the interruption-specific tests: even without an explicit
     barge-in call, if generation somehow advances between an LLM call
     starting and returning, the result must never be applied."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0051")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0051")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -48,7 +48,7 @@ def test_stale_llm_response_never_overwrites_a_newer_turn(db_session):
 
 
 def test_shutdown_during_turn_processing_does_not_raise(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0052")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0052")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -66,7 +66,7 @@ def test_two_conversation_starts_for_the_same_attempt_are_rejected(db_session):
     Python lock, which Step 35 explicitly rules out), surfaced by the
     orchestrator as a clear, catchable error rather than a raw DB
     exception."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0053")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0053")
     from app.services.ai.conversation.orchestrator import ConversationSessionAlreadyOwnedError
     from tests.ai_helpers import build_orchestrator as build
 

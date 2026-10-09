@@ -39,7 +39,7 @@ def _respond(monkeypatch, response: httpx.Response | Exception) -> None:
 
 def _trigger(client: DograhClient):
     return client.trigger_call(
-        phone_number="+15550100001", initial_context={"call_attempt_id": "a"}
+        phone_number="+919890100001", initial_context={"call_attempt_id": "a"}
     )
 
 

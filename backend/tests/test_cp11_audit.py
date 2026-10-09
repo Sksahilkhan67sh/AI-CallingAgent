@@ -189,7 +189,7 @@ def test_webhook_auth_failure_rows_are_throttled_per_source(anon_client, db_sess
 
 
 def test_duplicate_dograh_delivery_is_audited_and_still_idempotent(client, db_session):
-    _, _, attempt = _connected_call(db_session, phone="555-960-0099")
+    _, _, attempt = _connected_call(db_session, phone="989-960-0099")
     payload = {"call_attempt_id": str(attempt.id), "call_status": "user_hangup"}
     first = client.post(_DOGRAH, json=payload, headers=_headers())
     second = client.post(_DOGRAH, json=payload, headers=_headers())
@@ -317,7 +317,7 @@ def test_no_security_row_contains_credentials_tokens_or_phone_numbers(
     anon_client.post(_DOGRAH, json={}, headers={"Authorization": "Bearer WRONGWEBHOOKSECRET"})
     operator_client.post(
         "/api/v1/contacts",
-        json={"campaign_id": str(uuid.uuid4()), "phone_number": "+14155550123"},
+        json={"campaign_id": str(uuid.uuid4()), "phone_number": "+919845550123"},
     )
 
     everything = " ".join(
@@ -332,7 +332,7 @@ def test_no_security_row_contains_credentials_tokens_or_phone_numbers(
         settings.dograh_webhook_secret,
         settings.jwt_signing_key,
         login.json()["access_token"],
-        "+14155550123",
+        "+919845550123",
         "4155550123",
     ):
         assert forbidden not in everything

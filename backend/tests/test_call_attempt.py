@@ -8,7 +8,7 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CallAttemptState
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def _create_contact(db_session) -> Contact:
@@ -18,8 +18,8 @@ def _create_contact(db_session) -> Contact:
 
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-222-3333",
-        normalized_phone_number=normalize_phone_number("555-222-3333"),
+        phone_number="989-222-3333",
+        normalized_phone_number=normalize_phone_number("989-222-3333"),
     )
     db_session.add(contact)
     db_session.flush()
@@ -65,8 +65,8 @@ def test_same_attempt_number_allowed_for_different_contacts(db_session):
     db_session.flush()
     contact_b = Contact(
         campaign_id=campaign.id,
-        phone_number="555-444-5555",
-        normalized_phone_number=normalize_phone_number("555-444-5555"),
+        phone_number="989-444-5555",
+        normalized_phone_number=normalize_phone_number("989-444-5555"),
     )
     db_session.add(contact_b)
     db_session.flush()

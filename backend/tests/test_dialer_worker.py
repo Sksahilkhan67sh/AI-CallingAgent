@@ -1,15 +1,18 @@
 """The dialer worker -- Checkpoint 03 Steps 5-6, 15-19, 22-23, 36."""
 
+from datetime import time as dtime
+
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus, NeverConnectedFailureReason
-from app.services.phone import normalize_phone_number
+from app.models.retry_policy import RetryPolicy
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import JobOutcome, process_one_job
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.telephony.circuit_breaker import CircuitBreaker
 from app.services.telephony.mock_provider import always_ambiguous, always_fails
+from tests.phone_helpers import normalize_phone_number
 
 
 def _setup(
@@ -17,7 +20,7 @@ def _setup(
     *,
     campaign_status=CampaignStatus.ACTIVE,
     contact_status=ContactStatus.PENDING,
-    phone="555-500-0001"
+    phone="989-500-0001"
 ):
     campaign = Campaign(name="Worker test campaign", status=campaign_status)
     db_session.add(campaign)
@@ -128,7 +131,7 @@ def test_worker_skips_suppressed_contact_without_dialing(db_session, redis_clien
     from app.models.enums import SuppressionSource
     from app.models.suppression import Suppression
 
-    campaign, contact = _setup(db_session, phone="555-500-0002")
+    campaign, contact = _setup(db_session, phone="989-500-0002")
     db_session.add(
         Suppression(
             contact_id=contact.id,
@@ -152,7 +155,7 @@ def test_worker_skips_suppressed_contact_without_dialing(db_session, redis_clien
 
 def test_worker_skips_inactive_campaign(db_session, redis_client, provider):
     campaign, contact = _setup(
-        db_session, campaign_status=CampaignStatus.PAUSED, phone="555-500-0003"
+        db_session, campaign_status=CampaignStatus.PAUSED, phone="989-500-0003"
     )
     queue = _queue(redis_client)
     breaker = CircuitBreaker(redis_client, provider.name)
@@ -172,7 +175,7 @@ def test_worker_skips_inactive_campaign(db_session, redis_client, provider):
 
 def test_worker_skips_closed_contact(db_session, redis_client, provider):
     campaign, contact = _setup(
-        db_session, contact_status=ContactStatus.CLOSED, phone="555-500-0004"
+        db_session, contact_status=ContactStatus.CLOSED, phone="989-500-0004"
     )
     queue = _queue(redis_client)
     breaker = CircuitBreaker(redis_client, provider.name)
@@ -192,7 +195,7 @@ def test_worker_respects_calling_window(db_session, redis_client, provider):
     from app.repositories.suppression_repository import SuppressionRepository
     from app.services.eligibility_service import DialEligibilityService
 
-    campaign, contact = _setup(db_session, phone="555-500-0005")
+    campaign, contact = _setup(db_session, phone="989-500-0005")
     policy = RetryPolicy(campaign_id=campaign.id, window_start=dtime(9, 0), window_end=dtime(10, 0))
     db_session.add(policy)
     db_session.flush()
@@ -208,7 +211,19 @@ def test_worker_respects_calling_window(db_session, redis_client, provider):
 
 
 def test_provider_failure_persists_never_connected_reason(db_session, redis_client, provider):
-    campaign, contact = _setup(db_session, phone="555-500-0006")
+    campaign, contact = _setup(db_session, phone="989-500-0006")
+    # CP14: a campaign with no policy row now gets the DEFAULT retries, so this test (about
+    # the persisted reason and the terminal state) states "no retries" explicitly.
+    db_session.add(
+        RetryPolicy(
+            campaign_id=campaign.id,
+            max_retries=0,
+            retry_spacing_seconds=[],
+            window_start=dtime(0, 0),
+            window_end=dtime(23, 59, 59),
+        )
+    )
+    db_session.flush()
     provider.set_outcome(
         contact.normalized_phone_number, always_fails(NeverConnectedFailureReason.NO_ANSWER)
     )
@@ -232,9 +247,8 @@ def test_provider_failure_persists_never_connected_reason(db_session, redis_clie
     assert attempt.connection_failure_reason == NeverConnectedFailureReason.NO_ANSWER
     assert attempt.ended_at is not None
     # Checkpoint 05: never-connected failures now go through
-    # RecoveryManager. This test's campaign has no RetryPolicy row, so
-    # the conservative "no policy configured -> no retry" default
-    # applies and the contact is terminalized -- see
+    # RecoveryManager. This test's campaign has an explicit zero-retry policy (CP14: a
+    # missing row would mean the DEFAULT retries), so the contact is terminalized -- see
     # tests/test_recovery_manager.py for the full retry-decision matrix
     # when a RetryPolicy *is* configured.
     assert contact.status == ContactStatus.COMPLETED_PARTIAL
@@ -243,7 +257,7 @@ def test_provider_failure_persists_never_connected_reason(db_session, redis_clie
 def test_ambiguous_outcome_reconciles_to_existing_call(db_session, redis_client, provider):
     """Step 19/36: provider timed out, but the provider actually did
     create the call -- must NOT create a second one."""
-    campaign, contact = _setup(db_session, phone="555-500-0007")
+    campaign, contact = _setup(db_session, phone="989-500-0007")
     job = DialJob.new(campaign_id=campaign.id, contact_id=contact.id, attempt_number=1)
     provider.set_outcome(contact.normalized_phone_number, always_ambiguous)
     provider.simulate_provider_side_call_exists(job.idempotency_key, "mock-existing-call-123")
@@ -270,7 +284,7 @@ def test_ambiguous_outcome_reconciles_to_existing_call(db_session, redis_client,
 def test_ambiguous_outcome_reconciles_to_failure_when_call_never_existed(
     db_session, redis_client, provider
 ):
-    campaign, contact = _setup(db_session, phone="555-500-0008")
+    campaign, contact = _setup(db_session, phone="989-500-0008")
     provider.set_outcome(contact.normalized_phone_number, always_ambiguous)
     queue = _queue(redis_client)
     breaker = CircuitBreaker(redis_client, provider.name)
@@ -292,7 +306,7 @@ def test_ambiguous_outcome_reconciles_to_failure_when_call_never_existed(
 
 
 def test_no_admission_capacity_leaves_job_unacked(db_session, redis_client, provider):
-    campaign, contact = _setup(db_session, phone="555-500-0009")
+    campaign, contact = _setup(db_session, phone="989-500-0009")
     queue = _queue(redis_client)
     zero_capacity = AdmissionController(
         redis_client,

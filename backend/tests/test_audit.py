@@ -10,7 +10,7 @@ def test_contact_creation_is_audited(client, db_session):
     campaign = client.post("/api/v1/campaigns", json={"name": "Audit campaign"}).json()
     contact = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign["id"], "phone_number": "555-300-0001"},
+        json={"campaign_id": campaign["id"], "phone_number": "989-300-0001"},
     ).json()
 
     rows = db_session.execute(
@@ -41,7 +41,7 @@ def test_campaign_membership_change_is_audited(client, db_session):
     campaign_b = client.post("/api/v1/campaigns", json={"name": "Membership B"}).json()
     contact = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_a["id"], "phone_number": "555-300-0002"},
+        json={"campaign_id": campaign_a["id"], "phone_number": "989-300-0002"},
     ).json()
 
     client.post(f"/api/v1/campaigns/{campaign_b['id']}/contacts/{contact['id']}")

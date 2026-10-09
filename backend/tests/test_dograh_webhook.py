@@ -9,10 +9,11 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus
-from app.services.phone import normalize_phone_number
+from app.models.retry_policy import RetryPolicy
+from tests.phone_helpers import normalize_phone_number
 
 
-def _connected_call(db_session, *, phone="555-960-0001"):
+def _connected_call(db_session, *, phone="989-960-0001"):
     campaign = Campaign(name="Dograh webhook test", status=CampaignStatus.ACTIVE)
     db_session.add(campaign)
     db_session.flush()
@@ -51,7 +52,7 @@ def test_webhook_requires_auth(client, db_session):
 
 
 def test_webhook_rejects_wrong_secret(client, db_session):
-    _, _, attempt = _connected_call(db_session, phone="555-960-0002")
+    _, _, attempt = _connected_call(db_session, phone="989-960-0002")
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
         json={"call_attempt_id": str(attempt.id), "call_status": "user_hangup"},
@@ -61,7 +62,7 @@ def test_webhook_rejects_wrong_secret(client, db_session):
 
 
 def test_webhook_accepts_x_api_key_header_too(client, db_session):
-    _, _, attempt = _connected_call(db_session, phone="555-960-0003")
+    _, _, attempt = _connected_call(db_session, phone="989-960-0003")
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
         json={"call_attempt_id": str(attempt.id), "call_status": "user_hangup"},
@@ -71,7 +72,7 @@ def test_webhook_accepts_x_api_key_header_too(client, db_session):
 
 
 def test_normal_ending_completes_the_call_and_admits_analysis(client, db_session):
-    campaign, contact, attempt = _connected_call(db_session, phone="555-960-0004")
+    campaign, contact, attempt = _connected_call(db_session, phone="989-960-0004")
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
         json={
@@ -96,7 +97,10 @@ def test_normal_ending_completes_the_call_and_admits_analysis(client, db_session
 
 
 def test_technical_failure_status_routes_through_recovery(client, db_session):
-    campaign, contact, attempt = _connected_call(db_session, phone="555-960-0005")
+    campaign, contact, attempt = _connected_call(db_session, phone="989-960-0005")
+    # CP14: explicit "no retries" (a missing policy row now means the DEFAULT retries).
+    db_session.add(RetryPolicy(campaign_id=campaign.id, max_retries=0, retry_spacing_seconds=[]))
+    db_session.commit()
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
         json={"call_attempt_id": str(attempt.id), "call_status": "pipeline_error"},
@@ -109,14 +113,13 @@ def test_technical_failure_status_routes_through_recovery(client, db_session):
     db_session.refresh(attempt)
     assert attempt.state == CallAttemptState.DROPPED_MID_CALL
     assert attempt.disconnect_reason is not None
-    # No retry policy configured for this campaign -> RecoveryManager's
-    # own conservative default (no retry), same as the native path.
+    # Zero-retry policy -> RecoveryManager terminalizes, same as the native path.
     db_session.refresh(contact)
     assert contact.status == ContactStatus.COMPLETED_PARTIAL
 
 
 def test_duplicate_delivery_is_idempotent(client, db_session):
-    _, _, attempt = _connected_call(db_session, phone="555-960-0006")
+    _, _, attempt = _connected_call(db_session, phone="989-960-0006")
     payload = {"call_attempt_id": str(attempt.id), "call_status": "user_hangup"}
 
     first = client.post(
@@ -159,7 +162,7 @@ def test_malformed_call_attempt_id_returns_422(client, db_session):
 
 def test_transcript_fetch_failure_does_not_fail_the_webhook(client, db_session, monkeypatch):
     """§ never fail webhook processing over transcript formatting."""
-    _, _, attempt = _connected_call(db_session, phone="555-960-0007")
+    _, _, attempt = _connected_call(db_session, phone="989-960-0007")
 
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",

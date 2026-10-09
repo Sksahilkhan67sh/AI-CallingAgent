@@ -45,7 +45,6 @@ from app.models.enums import (
 from app.models.retry_policy import RetryPolicy
 from app.models.suppression import Suppression
 from app.repositories.call_attempt_repository import CallAttemptRepository
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import JobOutcome, process_claimed_job
 from app.services.queue.job import DialJob
@@ -58,6 +57,7 @@ from app.services.telephony.dograh_client import (
     DograhErrorCategory,
     DograhTriggerResult,
 )
+from tests.phone_helpers import normalize_phone_number
 
 _Session = sessionmaker(bind=create_engine(os.environ["PRIMARY_DB_URL"]))
 
@@ -122,7 +122,7 @@ def _world(n: int = 1, *, window=(dtime(0, 0), dtime.max)) -> tuple[str, list[st
         )
         ids = []
         for _ in range(n):
-            phone = f"555-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
+            phone = f"989-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
             contact = Contact(
                 campaign_id=campaign.id,
                 phone_number=phone,

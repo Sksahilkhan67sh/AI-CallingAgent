@@ -6,7 +6,7 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import CallEvent, ConversationMessage, ConversationSession
 from app.models.enums import CallAttemptState, ConversationRole
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def _create_call_attempt(db_session) -> CallAttempt:
@@ -16,8 +16,8 @@ def _create_call_attempt(db_session) -> CallAttempt:
 
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-888-0000",
-        normalized_phone_number=normalize_phone_number("555-888-0000"),
+        phone_number="989-888-0000",
+        normalized_phone_number=normalize_phone_number("989-888-0000"),
     )
     db_session.add(contact)
     db_session.flush()

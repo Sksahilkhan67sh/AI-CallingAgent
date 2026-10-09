@@ -7,7 +7,7 @@ from tests.ai_helpers import create_connected_call
 
 
 def test_checkpoint_persists_to_postgres(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0040")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0040")
     store = MemoryStore(db_session, redis_client=None)
     memory = WorkingMemory(
         attempt_id=str(attempt.id),
@@ -30,7 +30,7 @@ def test_checkpoint_persists_to_postgres(db_session):
 
 
 def test_load_latest_returns_the_most_recent_snapshot(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0041")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0041")
     store = MemoryStore(db_session, redis_client=None)
 
     first = WorkingMemory(attempt_id=str(attempt.id), contact_id=str(contact.id))
@@ -46,7 +46,7 @@ def test_load_latest_returns_the_most_recent_snapshot(db_session):
 
 
 def test_load_latest_returns_none_when_nothing_checkpointed(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0042")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0042")
     store = MemoryStore(db_session, redis_client=None)
 
     assert store.load_latest(str(attempt.id), str(contact.id)) is None
@@ -54,7 +54,7 @@ def test_load_latest_returns_none_when_nothing_checkpointed(db_session):
 
 def test_memory_is_not_the_transcript(db_session):
     """Step 12: the snapshot must not contain a `turns`/transcript field."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0043")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0043")
     memory = WorkingMemory(attempt_id=str(attempt.id), contact_id=str(contact.id))
 
     snapshot = memory.to_snapshot_dict()
@@ -64,7 +64,7 @@ def test_memory_is_not_the_transcript(db_session):
 
 
 def test_redis_cache_used_when_available(db_session, redis_client):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0044")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0044")
     store = MemoryStore(db_session, redis_client=redis_client)
     memory = WorkingMemory(attempt_id=str(attempt.id), contact_id=str(contact.id))
     memory.last_agent_utterance = "cached value"
@@ -81,7 +81,7 @@ def test_falls_back_to_postgres_when_redis_unavailable(db_session):
     non-existent server."""
     import redis as redis_lib
 
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0045")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0045")
     broken_redis = redis_lib.Redis(host="localhost", port=1, socket_connect_timeout=1)
     store = MemoryStore(db_session, redis_client=broken_redis)
 

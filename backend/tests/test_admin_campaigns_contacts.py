@@ -7,7 +7,7 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import ContactStatus, SuppressionSource
 from app.models.suppression import Suppression
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def _auth_headers(client):
@@ -24,7 +24,7 @@ def test_campaign_list_includes_contact_count(client, db_session):
     db_session.add(campaign)
     db_session.flush()
     for i in range(3):
-        phone = f"555-900-00{i:02d}"
+        phone = f"989-900-00{i:02d}"
         db_session.add(
             Contact(
                 campaign_id=campaign.id,
@@ -45,7 +45,7 @@ def test_campaign_detail_metrics(client, db_session):
     campaign = Campaign(name="metrics test")
     db_session.add(campaign)
     db_session.flush()
-    phone = "555-900-0100"
+    phone = "989-900-0100"
     db_session.add(
         Contact(
             campaign_id=campaign.id,
@@ -69,7 +69,7 @@ def test_contact_list_masks_phone_numbers(client, db_session):
     campaign = Campaign(name="masking test")
     db_session.add(campaign)
     db_session.flush()
-    phone = "5559001234"
+    phone = "9899001234"
     db_session.add(
         Contact(
             campaign_id=campaign.id,
@@ -93,7 +93,7 @@ def test_contact_detail_shows_suppression_indicator(client, db_session):
     campaign = Campaign(name="suppression test")
     db_session.add(campaign)
     db_session.flush()
-    phone = "5559005678"
+    phone = "9899005678"
     contact = Contact(
         campaign_id=campaign.id,
         phone_number=phone,
@@ -125,7 +125,7 @@ def test_contact_without_suppression_shows_false(client, db_session):
     campaign = Campaign(name="no suppression test")
     db_session.add(campaign)
     db_session.flush()
-    phone = "5559009999"
+    phone = "9899009999"
     contact = Contact(
         campaign_id=campaign.id,
         phone_number=phone,

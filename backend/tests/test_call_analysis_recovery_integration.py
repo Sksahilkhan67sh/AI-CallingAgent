@@ -12,9 +12,9 @@ from app.models.contact import Contact
 from app.models.conversation import ConversationMessage, ConversationRole, ConversationSession
 from app.models.enums import CallAttemptState, ContactStatus, MidCallDisconnectReason
 from app.services.analysis.factory import get_analysis_queue
-from app.services.phone import normalize_phone_number
 from app.services.recovery.manager import RecoveryManager
 from app.services.recovery.scheduler import RecoveryScheduler
+from tests.phone_helpers import normalize_phone_number
 
 
 def _setup(db_session, *, phone, attempt_state):
@@ -37,7 +37,7 @@ def _setup(db_session, *, phone, attempt_state):
 
 def test_mid_call_disconnect_exhausted_retries_admits_analysis(db_session, redis_client):
     campaign, contact, attempt = _setup(
-        db_session, phone="555-600-0001", attempt_state=CallAttemptState.DROPPED_MID_CALL
+        db_session, phone="989-600-0001", attempt_state=CallAttemptState.DROPPED_MID_CALL
     )
     session = ConversationSession(call_attempt_id=attempt.id)
     db_session.add(session)
@@ -72,7 +72,7 @@ def test_never_connected_exhausted_retries_does_not_admit_analysis(db_session, r
     refuse it even though _terminalize sets the same COMPLETED_PARTIAL
     contact status it would for a real mid-call disconnect."""
     campaign, contact, attempt = _setup(
-        db_session, phone="555-600-0002", attempt_state=CallAttemptState.FAILED_TO_CONNECT
+        db_session, phone="989-600-0002", attempt_state=CallAttemptState.FAILED_TO_CONNECT
     )
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
 

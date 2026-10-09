@@ -12,7 +12,7 @@ def _upload(client, name: str, csv_text: str):
 
 
 def test_valid_csv_import_creates_campaign_and_contacts(client):
-    csv_text = "phone_number\n555-200-0001\n555-200-0002\n555-200-0003\n"
+    csv_text = "phone_number\n989-200-0001\n989-200-0002\n989-200-0003\n"
 
     response = _upload(client, "Valid Import", csv_text)
 
@@ -30,7 +30,7 @@ def test_valid_csv_import_creates_campaign_and_contacts(client):
 
 
 def test_invalid_rows_are_rejected_and_reported(client):
-    csv_text = "phone_number\n555-200-0010\nnot-a-real-number\n"
+    csv_text = "phone_number\n989-200-0010\nnot-a-real-number\n"
 
     response = _upload(client, "Invalid rows", csv_text)
 
@@ -38,12 +38,12 @@ def test_invalid_rows_are_rejected_and_reported(client):
     body = response.json()
     assert body["created"] == 1
     assert body["invalid"] == 1
-    assert body["errors"][0]["reason"] == "invalid_phone_number"
+    assert body["errors"][0]["reason"] == "invalid_number"
     assert body["errors"][0]["row"] == 3  # header=1, row 2 valid, row 3 invalid
 
 
 def test_duplicate_rows_within_file_create_only_one_contact(client):
-    csv_text = "phone_number\n555-200-0020\n555-200-0020\n555-200-0020\n"
+    csv_text = "phone_number\n989-200-0020\n989-200-0020\n989-200-0020\n"
 
     response = _upload(client, "Dup rows", csv_text)
 
@@ -76,7 +76,7 @@ def test_missing_phone_number_column_is_rejected(client):
 
 
 def test_import_summary_never_returns_full_contact_list(client):
-    csv_text = "phone_number\n555-200-0030\n555-200-0031\n"
+    csv_text = "phone_number\n989-200-0030\n989-200-0031\n"
 
     response = _upload(client, "Summary only", csv_text)
 

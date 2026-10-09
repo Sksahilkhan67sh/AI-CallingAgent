@@ -159,7 +159,7 @@ POLICY = [
 def test_http_status_maps_to_exactly_one_policy(monkeypatch, status, category, policy, reason_key):
     _respond(monkeypatch, status)
     with pytest.raises(DograhApiError) as raised:
-        _client().trigger_call(phone_number="+15559990001", initial_context={})
+        _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert raised.value.category == category
     failure = classify_trigger_error(raised.value)
     assert (failure.policy, failure.reason_key) == (policy, reason_key)
@@ -171,7 +171,7 @@ def test_2xx_initiated_is_acceptance_not_an_outcome(monkeypatch):
         200,
         json={"status": "initiated", "workflow_run_id": 4242, "workflow_run_name": "WR"},
     )
-    result = _client().trigger_call(phone_number="+15559990001", initial_context={})
+    result = _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert result.workflow_run_id == 4242
     # The client result carries no success/complete notion at all: the attempt state is
     # decided by the worker (INITIATED) and the webhook, never by this return value.
@@ -189,7 +189,7 @@ def test_2xx_initiated_is_acceptance_not_an_outcome(monkeypatch):
 def test_malformed_or_runless_acceptance_is_ambiguous_never_success(monkeypatch, response):
     monkeypatch.setattr("httpx.post", lambda url, **k: response)
     with pytest.raises(DograhApiError) as raised:
-        _client().trigger_call(phone_number="+15559990001", initial_context={})
+        _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert classify_trigger_error(raised.value).policy == TriggerPolicy.AMBIGUOUS
 
 
@@ -199,7 +199,7 @@ def test_network_timeout_is_ambiguous_and_connect_failure_is_not(monkeypatch):
 
     monkeypatch.setattr("httpx.post", read_timeout)
     with pytest.raises(DograhApiError) as raised:
-        _client().trigger_call(phone_number="+15559990001", initial_context={})
+        _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert classify_trigger_error(raised.value).policy == TriggerPolicy.AMBIGUOUS
 
     def refused(url, **k):
@@ -207,7 +207,7 @@ def test_network_timeout_is_ambiguous_and_connect_failure_is_not(monkeypatch):
 
     monkeypatch.setattr("httpx.post", refused)
     with pytest.raises(DograhApiError) as raised:
-        _client().trigger_call(phone_number="+15559990001", initial_context={})
+        _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert classify_trigger_error(raised.value).policy == TriggerPolicy.TRANSIENT
 
 
@@ -240,12 +240,12 @@ def test_retry_after_parsing_is_bounded_and_never_raises(header, expected):
 def test_client_honors_retry_after_only_on_429(monkeypatch):
     _respond(monkeypatch, 429, headers={"Retry-After": "90"})
     with pytest.raises(DograhApiError) as raised:
-        _client().trigger_call(phone_number="+15559990001", initial_context={})
+        _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert raised.value.retry_after_seconds == 90
 
     _respond(monkeypatch, 503, headers={"Retry-After": "90"})
     with pytest.raises(DograhApiError) as raised:
-        _client().trigger_call(phone_number="+15559990001", initial_context={})
+        _client().trigger_call(phone_number="+919899990001", initial_context={})
     assert raised.value.retry_after_seconds is None
 
 
@@ -253,7 +253,7 @@ def test_client_clamps_huge_retry_after_to_the_configured_ceiling(monkeypatch):
     _respond(monkeypatch, 429, headers={"Retry-After": "86400"})
     with pytest.raises(DograhApiError) as raised:
         _client(retry_after_max_seconds=600).trigger_call(
-            phone_number="+15559990001", initial_context={}
+            phone_number="+919899990001", initial_context={}
         )
     assert raised.value.retry_after_seconds == 600
 
@@ -457,14 +457,14 @@ def _call_world(*, state=CallAttemptState.INITIATED, run_id="99", phone_suffix=N
     from app.models.campaign import Campaign
     from app.models.enums import CampaignStatus
     from app.models.retry_policy import RetryPolicy
-    from app.services.phone import normalize_phone_number
+    from tests.phone_helpers import normalize_phone_number
 
     with _Session() as s:
         campaign = Campaign(name="cp13 webhook", status=CampaignStatus.ACTIVE)
         s.add(campaign)
         s.flush()
         s.add(RetryPolicy(campaign_id=campaign.id))
-        phone = phone_suffix or f"555-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
+        phone = phone_suffix or f"989-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
         contact = Contact(
             campaign_id=campaign.id,
             phone_number=phone,

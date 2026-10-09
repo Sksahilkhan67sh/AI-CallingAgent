@@ -19,7 +19,7 @@ def _create_contact(client, campaign_id, phone):
 def test_associate_contact_moves_it_to_new_campaign(client):
     campaign_a = _create_campaign(client, "A")
     campaign_b = _create_campaign(client, "B")
-    contact = _create_contact(client, campaign_a, "555-111-0001")
+    contact = _create_contact(client, campaign_a, "989-111-0001")
 
     response = client.post(f"/api/v1/campaigns/{campaign_b}/contacts/{contact['id']}")
 
@@ -43,7 +43,7 @@ def test_associate_with_nonexistent_contact_returns_404(client):
 
 def test_associate_with_nonexistent_campaign_returns_404(client):
     campaign_a = _create_campaign(client)
-    contact = _create_contact(client, campaign_a, "555-111-0002")
+    contact = _create_contact(client, campaign_a, "989-111-0002")
 
     response = client.post(
         f"/api/v1/campaigns/00000000-0000-0000-0000-000000000000/contacts/{contact['id']}"
@@ -54,16 +54,16 @@ def test_associate_with_nonexistent_campaign_returns_404(client):
 
 def test_associate_suppressed_contact_is_rejected(client, db_session):
     from app.models.suppression import Suppression
-    from app.services.phone import normalize_phone_number
+    from tests.phone_helpers import normalize_phone_number
 
     campaign_a = _create_campaign(client, "A2")
     campaign_b = _create_campaign(client, "B2")
-    contact = _create_contact(client, campaign_a, "555-111-0003")
+    contact = _create_contact(client, campaign_a, "989-111-0003")
 
     db_session.add(
         Suppression(
             contact_id=contact["id"],
-            phone_number=normalize_phone_number("555-111-0003"),
+            phone_number=normalize_phone_number("989-111-0003"),
             reason="opted out",
             source=SuppressionSource.MANUAL_API,
         )
@@ -78,7 +78,7 @@ def test_associate_suppressed_contact_is_rejected(client, db_session):
 def test_associate_deactivated_contact_is_rejected(client):
     campaign_a = _create_campaign(client, "A3")
     campaign_b = _create_campaign(client, "B3")
-    contact = _create_contact(client, campaign_a, "555-111-0004")
+    contact = _create_contact(client, campaign_a, "989-111-0004")
     client.post(f"/api/v1/contacts/{contact['id']}/deactivate")
 
     response = client.post(f"/api/v1/campaigns/{campaign_b}/contacts/{contact['id']}")
@@ -91,7 +91,7 @@ def test_associate_into_completed_campaign_is_rejected(client):
     campaign_b = _create_campaign(client, "B4")
     client.patch(f"/api/v1/campaigns/{campaign_b}", json={"status": "active"})
     client.patch(f"/api/v1/campaigns/{campaign_b}", json={"status": "completed"})
-    contact = _create_contact(client, campaign_a, "555-111-0005")
+    contact = _create_contact(client, campaign_a, "989-111-0005")
 
     response = client.post(f"/api/v1/campaigns/{campaign_b}/contacts/{contact['id']}")
 
@@ -100,7 +100,7 @@ def test_associate_into_completed_campaign_is_rejected(client):
 
 def test_remove_contact_from_campaign_soft_closes_it(client):
     campaign_id = _create_campaign(client)
-    contact = _create_contact(client, campaign_id, "555-111-0006")
+    contact = _create_contact(client, campaign_id, "989-111-0006")
 
     response = client.delete(f"/api/v1/campaigns/{campaign_id}/contacts/{contact['id']}")
 
@@ -114,7 +114,7 @@ def test_remove_contact_from_campaign_soft_closes_it(client):
 def test_remove_contact_not_in_that_campaign_returns_404(client):
     campaign_a = _create_campaign(client, "A5")
     campaign_b = _create_campaign(client, "B5")
-    contact = _create_contact(client, campaign_a, "555-111-0007")
+    contact = _create_contact(client, campaign_a, "989-111-0007")
 
     response = client.delete(f"/api/v1/campaigns/{campaign_b}/contacts/{contact['id']}")
 
@@ -123,8 +123,8 @@ def test_remove_contact_not_in_that_campaign_returns_404(client):
 
 def test_campaign_contact_counts(client):
     campaign_id = _create_campaign(client)
-    _create_contact(client, campaign_id, "555-111-0008")
-    contact_2 = _create_contact(client, campaign_id, "555-111-0009")
+    _create_contact(client, campaign_id, "989-111-0008")
+    contact_2 = _create_contact(client, campaign_id, "989-111-0009")
     client.post(f"/api/v1/contacts/{contact_2['id']}/deactivate")
 
     response = client.get(f"/api/v1/campaigns/{campaign_id}/contacts/counts")

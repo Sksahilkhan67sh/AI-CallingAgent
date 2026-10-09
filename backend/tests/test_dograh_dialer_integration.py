@@ -8,7 +8,6 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import CallEvent
 from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import JobOutcome, process_one_job
 from app.services.queue.job import DialJob
@@ -19,9 +18,10 @@ from app.services.telephony.dograh_client import (
     DograhErrorCategory,
     DograhTriggerResult,
 )
+from tests.phone_helpers import normalize_phone_number
 
 
-def _setup(db_session, *, phone="555-950-0001"):
+def _setup(db_session, *, phone="989-950-0001"):
     campaign = Campaign(name="Dograh dialer test", status=CampaignStatus.ACTIVE)
     db_session.add(campaign)
     db_session.flush()
@@ -119,7 +119,7 @@ def test_trigger_failure_marks_failed_to_connect_and_does_not_crash(
     db_session, redis_client, provider, monkeypatch
 ):
     _with_dograh_engine(monkeypatch)
-    campaign, contact = _setup(db_session, phone="555-950-0002")
+    campaign, contact = _setup(db_session, phone="989-950-0002")
 
     outcome = _run(
         db_session,
@@ -159,7 +159,7 @@ def test_ambiguous_timeout_is_tagged_distinctly_and_not_retried_immediately(
     observable/distinguishable, and it still only ever goes through
     RecoveryManager's normal backoff, never an immediate re-trigger."""
     _with_dograh_engine(monkeypatch)
-    campaign, contact = _setup(db_session, phone="555-950-0003")
+    campaign, contact = _setup(db_session, phone="989-950-0003")
 
     outcome = _run(
         db_session,

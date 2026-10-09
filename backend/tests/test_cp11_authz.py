@@ -45,7 +45,7 @@ _MUTATIONS = [
     (
         "POST",
         "/api/v1/campaigns/import",
-        {"data": {"name": "x"}, "files": {"file": ("c.csv", b"phone_number\n+14155550100\n")}},
+        {"data": {"name": "x"}, "files": {"file": ("c.csv", b"phone_number\n+919845550100\n")}},
     ),
     ("POST", f"/api/v1/campaigns/{_ID}/contacts/{_ID}", {}),
     ("DELETE", f"/api/v1/campaigns/{_ID}/contacts/{_ID}", {}),
@@ -53,9 +53,9 @@ _MUTATIONS = [
     (
         "POST",
         "/api/v1/contacts",
-        {"json": {"campaign_id": str(_ID), "phone_number": "+14155550100"}},
+        {"json": {"campaign_id": str(_ID), "phone_number": "+919845550100"}},
     ),
-    ("PATCH", f"/api/v1/contacts/{_ID}", {"json": {"phone_number": "+14155550101"}}),
+    ("PATCH", f"/api/v1/contacts/{_ID}", {"json": {"phone_number": "+919845550101"}}),
     ("POST", f"/api/v1/contacts/{_ID}/deactivate", {}),
 ]
 _ALL = _READS + _MUTATIONS
@@ -239,7 +239,7 @@ def test_audit_actor_is_the_authenticated_principal(db_session, client):
     assert created.status_code == 201
     contact = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": created.json()["id"], "phone_number": "+14155550142"},
+        json={"campaign_id": created.json()["id"], "phone_number": "+919845550142"},
         headers=headers,
     )
     assert contact.status_code == 201
