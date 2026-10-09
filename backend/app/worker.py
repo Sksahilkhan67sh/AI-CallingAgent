@@ -124,7 +124,11 @@ def run() -> None:
                 db.commit()
                 # outbound_blocked at this level is the idle poll during a kill switch
                 # freeze (rate-limited warning in dialer_worker) -- not worth a line a second.
-                if outcome not in (JobOutcome.NO_JOB, JobOutcome.OUTBOUND_BLOCKED):
+                if outcome not in (
+                    JobOutcome.NO_JOB,
+                    JobOutcome.OUTBOUND_BLOCKED,
+                    JobOutcome.BUDGET_BLOCKED,
+                ):
                     logger.info("job_processed", extra={"outcome": outcome})
 
                 # Checkpoint 07 §25: best-effort liveness signal for the

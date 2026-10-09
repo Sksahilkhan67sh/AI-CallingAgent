@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -21,6 +21,14 @@ class Campaign(Base):
         nullable=False,
         default=CampaignStatus.DRAFT,
         index=True,  # "campaigns by ... status"
+    )
+    # CP14: the IANA zone the campaign's calling window is read in, and the region used to
+    # parse numbers written without a country code. Single-tenant defaults.
+    timezone: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'Asia/Kolkata'")
+    )
+    default_region: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'IN'")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -8,7 +8,7 @@ from tests.ai_helpers import build_orchestrator, create_connected_call
 
 
 def test_llm_timeout_triggers_bounded_retry_then_fallback(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0030")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0030")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     llm.force_timeout = True
@@ -24,7 +24,7 @@ def test_llm_timeout_triggers_bounded_retry_then_fallback(db_session):
 
 
 def test_llm_provider_error_falls_back_safely(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0031")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0031")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     llm.force_error = True
@@ -36,7 +36,7 @@ def test_llm_provider_error_falls_back_safely(db_session):
 
 
 def test_tts_timeout_does_not_send_stale_audio(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0032")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0032")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     tts.force_timeout = True
@@ -48,7 +48,7 @@ def test_tts_timeout_does_not_send_stale_audio(db_session):
 
 
 def test_tts_error_is_handled_without_crashing(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0033")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0033")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     tts.force_error = True
@@ -59,7 +59,7 @@ def test_tts_error_is_handled_without_crashing(db_session):
 
 
 def test_malformed_llm_response_triggers_regeneration_then_fallback(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0034")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0034")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     llm.force_malformed = True
@@ -75,7 +75,7 @@ def test_malformed_llm_response_triggers_regeneration_then_fallback(db_session):
 
 
 def test_repeated_decline_ends_conversation(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0035")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0035")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -84,7 +84,7 @@ def test_repeated_decline_ends_conversation(db_session):
 
 
 def test_repeated_unclear_ends_conversation_instead_of_looping(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0036")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0036")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -96,7 +96,7 @@ def test_repeated_unclear_ends_conversation_instead_of_looping(db_session):
 
 
 def test_silence_handling_prompts_once_then_terminates(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0037")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0037")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -110,7 +110,7 @@ def test_silence_handling_prompts_once_then_terminates(db_session):
 
 
 def test_maximum_turn_limit_is_enforced(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0038")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0038")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     from app.services.ai.conversation import orchestrator as orch_module
@@ -130,7 +130,7 @@ def test_maximum_turn_limit_is_enforced(db_session):
 def test_maximum_conversation_duration_is_enforced(db_session):
     from datetime import UTC, datetime, timedelta
 
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0039")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0039")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     orchestrator.session.started_at = datetime.now(UTC) - timedelta(hours=1)

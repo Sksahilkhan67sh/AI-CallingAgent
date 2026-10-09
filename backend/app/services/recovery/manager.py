@@ -33,6 +33,7 @@ from app.services.analysis.admission import enqueue_call_analysis
 from app.services.audit_service import record_audit_event
 from app.services.recovery.job import RecoveryJob
 from app.services.recovery.scheduler import RecoveryScheduler
+from app.services.retry_policy_service import get_effective_policy
 
 logger = logging.getLogger("recovery")
 
@@ -83,9 +84,9 @@ class RecoveryManager:
         if campaign.status == CampaignStatus.COMPLETED:
             return self._terminalize(call_attempt, contact, "campaign_completed")
 
-        retry_policy = self.db.execute(
-            select(RetryPolicy).where(RetryPolicy.campaign_id == campaign.id)
-        ).scalar_one_or_none()
+        # CP14: a campaign without a stored policy is judged by the DEFAULT one, never by
+        # "no policy -> no retries".
+        retry_policy = get_effective_policy(self.db, campaign)
 
         decision = self._decide(
             call_attempt, retry_policy, never_connected, reason_key, retry_after_seconds

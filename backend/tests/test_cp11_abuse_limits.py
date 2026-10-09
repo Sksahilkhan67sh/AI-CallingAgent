@@ -48,7 +48,7 @@ def _campaign(db_session):
 
 
 def _csv():
-    return {"file": ("c.csv", b"phone_number\n+14155550100\n")}
+    return {"file": ("c.csv", b"phone_number\n+919845550100\n")}
 
 
 # --- budgets are enforced ------------------------------------------------------------
@@ -79,7 +79,7 @@ def test_mutations_share_one_budget_across_routes(client, db_session, monkeypatc
         client.patch(f"/api/v1/campaigns/{campaign.id}", json={"name": "b"}).status_code,
         client.post(
             "/api/v1/contacts",
-            json={"campaign_id": str(campaign.id), "phone_number": "+14155550111"},
+            json={"campaign_id": str(campaign.id), "phone_number": "+919845550111"},
         ).status_code,
         client.post("/api/v1/campaigns", json={"name": "c"}).status_code,
     ]
@@ -316,7 +316,7 @@ def test_huge_declared_content_length_is_rejected_without_reading_the_body(clien
 def test_import_gets_a_larger_cap_but_not_an_unbounded_one(client):
     # > 5 MiB file but < 6 MiB body: reaches the import route's own file check (413/422),
     # not the generic 1 MiB middleware cap that would have rejected it earlier.
-    big_ok = b"phone_number\n" + b"+14155550100\n" * 1000
+    big_ok = b"phone_number\n" + b"+919845550100\n" * 1000
     assert client.post(
         "/api/v1/campaigns/import", data={"name": "a"}, files={"file": ("c.csv", big_ok)}
     ).status_code == 201  # well over nothing, well under both caps

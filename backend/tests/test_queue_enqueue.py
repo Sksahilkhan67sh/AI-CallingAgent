@@ -12,7 +12,7 @@ def _create_active_campaign(client, name="Enqueue campaign"):
 def test_enqueue_eligible_contact(client, redis_client):
     campaign_id = _create_active_campaign(client)
     client.post(
-        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "555-400-0001"}
+        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "989-400-0001"}
     )
 
     response = client.post(f"/api/v1/campaigns/{campaign_id}/enqueue")
@@ -26,16 +26,16 @@ def test_enqueue_eligible_contact(client, redis_client):
 
 def test_enqueue_suppressed_contact_is_skipped(client, redis_client, db_session):
     from app.models.suppression import Suppression
-    from app.services.phone import normalize_phone_number
+    from tests.phone_helpers import normalize_phone_number
 
     campaign_id = _create_active_campaign(client, "Suppressed enqueue")
     contact = client.post(
-        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "555-400-0002"}
+        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "989-400-0002"}
     ).json()
     db_session.add(
         Suppression(
             contact_id=contact["id"],
-            phone_number=normalize_phone_number("555-400-0002"),
+            phone_number=normalize_phone_number("989-400-0002"),
             reason="opted out",
             source=SuppressionSource.MANUAL_API,
         )
@@ -69,7 +69,7 @@ def test_enqueue_nonexistent_campaign_returns_404(client, redis_client):
 def test_duplicate_enqueue_does_not_double_queue(client, redis_client):
     campaign_id = _create_active_campaign(client, "Double enqueue")
     client.post(
-        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "555-400-0003"}
+        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "989-400-0003"}
     )
 
     first = client.post(f"/api/v1/campaigns/{campaign_id}/enqueue").json()
@@ -84,7 +84,7 @@ def test_duplicate_enqueue_does_not_double_queue(client, redis_client):
 def test_enqueue_does_not_target_closed_contacts(client, redis_client):
     campaign_id = _create_active_campaign(client, "Skip closed contacts")
     contact = client.post(
-        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "555-400-0004"}
+        "/api/v1/contacts", json={"campaign_id": campaign_id, "phone_number": "989-400-0004"}
     ).json()
     client.post(f"/api/v1/contacts/{contact['id']}/deactivate")  # status -> Closed
 

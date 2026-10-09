@@ -22,7 +22,7 @@ from app.schemas.queue import EnqueueResult
 from app.services.admin.auth import AdminPrincipal
 from app.services.campaign_contact_service import CampaignContactService
 from app.services.campaign_service import CampaignService
-from app.services.contact_import_service import ContactImportService
+from app.services.contact_import_service import MAX_IMPORT_FILE_BYTES, ContactImportService
 from app.services.contact_service import ContactService
 from app.services.queue.enqueue_service import QueueEnqueueService, requeue_after_resume
 from app.services.queue.factory import get_queue
@@ -37,7 +37,6 @@ _ANY_ROLE = [Depends(require_admin)]
 # A conservative upload-size guard -- well above what MAX_IMPORT_ROWS
 # rows of a phone_number column would ever produce, just there so an
 # oversized upload is rejected before being read into memory at all.
-_MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024
 
 
 @router.post(
@@ -112,10 +111,10 @@ async def import_contacts(
 ) -> BulkContactImportResult:
     """FR-1.1-FR-1.4: creates the campaign only if the file has at least
     one valid contact -- see docs/CHECKPOINT-02-NOTES.md."""
-    contents = await file.read(_MAX_IMPORT_FILE_BYTES + 1)
-    if len(contents) > _MAX_IMPORT_FILE_BYTES:
+    contents = await file.read(MAX_IMPORT_FILE_BYTES + 1)
+    if len(contents) > MAX_IMPORT_FILE_BYTES:
         raise ValidationError(
-            f"Import file exceeds the maximum size of {_MAX_IMPORT_FILE_BYTES} bytes"
+            f"Import file exceeds the maximum size of {MAX_IMPORT_FILE_BYTES} bytes"
         )
     return ContactImportService(db, actor=principal.username).import_csv(name, contents)
 

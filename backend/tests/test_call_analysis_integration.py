@@ -18,7 +18,7 @@ from app.services.analysis.admission import enqueue_call_analysis
 from app.services.analysis.factory import get_analysis_queue
 from app.services.analysis.llm.fake_llm import FakeAnalysisLLM
 from app.services.analysis.worker import AnalysisJobOutcome, process_one_analysis_job
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def test_full_lifecycle_terminal_call_to_persisted_analysis(db_session, redis_client):
@@ -28,8 +28,8 @@ def test_full_lifecycle_terminal_call_to_persisted_analysis(db_session, redis_cl
     db_session.flush()
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-500-0001",
-        normalized_phone_number=normalize_phone_number("555-500-0001"),
+        phone_number="989-500-0001",
+        normalized_phone_number=normalize_phone_number("989-500-0001"),
         status=ContactStatus.COMPLETED,
     )
     db_session.add(contact)
@@ -111,8 +111,8 @@ def test_analysis_failure_does_not_touch_call_or_campaign_state(db_session, redi
     db_session.flush()
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-500-0002",
-        normalized_phone_number=normalize_phone_number("555-500-0002"),
+        phone_number="989-500-0002",
+        normalized_phone_number=normalize_phone_number("989-500-0002"),
         status=ContactStatus.COMPLETED,
     )
     db_session.add(contact)

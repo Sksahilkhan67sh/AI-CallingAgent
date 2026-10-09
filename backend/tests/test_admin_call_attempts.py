@@ -16,7 +16,7 @@ from app.models.conversation import (
     ConversationSession,
 )
 from app.models.enums import AnalysisStatus, CallAttemptState, ContactStatus, InterestStatus
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def _auth_headers(client):
@@ -28,7 +28,7 @@ def _auth_headers(client):
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def _full_call(db_session, *, phone="555-800-0001"):
+def _full_call(db_session, *, phone="989-800-0001"):
     campaign = Campaign(name="call detail test")
     db_session.add(campaign)
     db_session.flush()
@@ -94,8 +94,8 @@ def test_list_returns_call_attempts_with_analysis_joined(client, db_session):
 
 
 def test_list_filters_by_campaign(client, db_session):
-    campaign_a, _, attempt_a = _full_call(db_session, phone="555-800-0002")
-    campaign_b, _, attempt_b = _full_call(db_session, phone="555-800-0003")
+    campaign_a, _, attempt_a = _full_call(db_session, phone="989-800-0002")
+    campaign_b, _, attempt_b = _full_call(db_session, phone="989-800-0003")
 
     response = client.get(
         "/api/v1/admin/call-attempts",
@@ -110,7 +110,7 @@ def test_list_filters_by_campaign(client, db_session):
 
 
 def test_detail_includes_transcript_analysis_and_recovery_events(client, db_session):
-    _, contact, attempt = _full_call(db_session, phone="555-800-0004")
+    _, contact, attempt = _full_call(db_session, phone="989-800-0004")
 
     response = client.get(
         f"/api/v1/admin/call-attempts/{attempt.id}", headers=_auth_headers(client)
@@ -140,8 +140,8 @@ def test_detail_404_for_missing_call_attempt(client, db_session):
 def test_changing_id_in_url_does_not_leak_a_different_calls_data(client, db_session):
     """§36 IDOR check: two different call attempts' detail responses
     must never cross-contaminate."""
-    _, _, attempt_a = _full_call(db_session, phone="555-800-0005")
-    _, _, attempt_b = _full_call(db_session, phone="555-800-0006")
+    _, _, attempt_a = _full_call(db_session, phone="989-800-0005")
+    _, _, attempt_b = _full_call(db_session, phone="989-800-0006")
 
     resp_a = client.get(
         f"/api/v1/admin/call-attempts/{attempt_a.id}", headers=_auth_headers(client)

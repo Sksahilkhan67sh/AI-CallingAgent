@@ -31,13 +31,13 @@ from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus, SuppressionSource
 from app.models.suppression import Suppression
 from app.services import kill_switch
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import JobOutcome, process_claimed_job, process_one_job
 from app.services.queue.factory import get_queue
 from app.services.queue.job import DialJob
 from app.services.telephony.circuit_breaker import CircuitBreaker
 from tests.conftest import _bearer
+from tests.phone_helpers import normalize_phone_number
 
 _engine = create_engine(os.environ["PRIMARY_DB_URL"])
 _Session = sessionmaker(bind=_engine)
@@ -76,7 +76,7 @@ def _campaign_with_contacts(n: int, *, status=CampaignStatus.ACTIVE):
         s.flush()
         contacts = []
         for i in range(n):
-            phone = f"555-{800 + i // 100:03d}-{i % 100:04d}"
+            phone = f"989-{800 + i // 100:03d}-{i % 100:04d}"
             contact = Contact(
                 campaign_id=campaign.id,
                 phone_number=phone,

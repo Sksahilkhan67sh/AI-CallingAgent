@@ -6,10 +6,10 @@ from app.models.contact import Contact
 from app.models.conversation import ConversationMessage, ConversationRole, ConversationSession
 from app.models.enums import CallAttemptState, ContactStatus
 from app.services.analysis.transcript import prepare_transcript
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
-def _session(db_session, phone="555-200-0001"):
+def _session(db_session, phone="989-200-0001"):
     campaign = Campaign(name="CP06 transcript test")
     db_session.add(campaign)
     db_session.flush()
@@ -51,7 +51,7 @@ def test_transcript_is_chronological(db_session):
 
 
 def test_transcript_drops_empty_and_whitespace_only_messages(db_session):
-    session = _session(db_session, phone="555-200-0002")
+    session = _session(db_session, phone="989-200-0002")
     _add(db_session, session, 1, ConversationRole.AGENT, "hello")
     _add(db_session, session, 2, ConversationRole.CONTACT, "   ")
     _add(db_session, session, 3, ConversationRole.AGENT, "")
@@ -65,7 +65,7 @@ def test_transcript_drops_empty_and_whitespace_only_messages(db_session):
 
 
 def test_transcript_collapses_duplicate_whitespace(db_session):
-    session = _session(db_session, phone="555-200-0003")
+    session = _session(db_session, phone="989-200-0003")
     _add(db_session, session, 1, ConversationRole.AGENT, "hello   there\n\nfriend")
 
     transcript = prepare_transcript(db_session, session)
@@ -74,7 +74,7 @@ def test_transcript_collapses_duplicate_whitespace(db_session):
 
 
 def test_transcript_never_mutates_original_messages(db_session):
-    session = _session(db_session, phone="555-200-0004")
+    session = _session(db_session, phone="989-200-0004")
     _add(db_session, session, 1, ConversationRole.AGENT, "hello   there")
 
     prepare_transcript(db_session, session)
@@ -94,7 +94,7 @@ def test_transcript_truncates_long_conversations_preserving_ends(db_session, mon
     monkeypatch.setenv("ANALYSIS_MAX_TRANSCRIPT_MESSAGES", "10")
     config.get_settings.cache_clear()
     try:
-        session = _session(db_session, phone="555-200-0005")
+        session = _session(db_session, phone="989-200-0005")
         for i in range(30):
             _add(db_session, session, i, ConversationRole.AGENT, f"line {i}")
 

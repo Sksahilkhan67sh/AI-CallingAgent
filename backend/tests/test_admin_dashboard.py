@@ -14,7 +14,7 @@ from app.models.enums import (
     ContactStatus,
     InterestStatus,
 )
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def _auth_headers(client):
@@ -40,7 +40,7 @@ def test_a_contact_with_two_attempts_counts_as_one_contact_two_attempts(client, 
     campaign = Campaign(name="dashboard aggregate test", status=CampaignStatus.ACTIVE)
     db_session.add(campaign)
     db_session.flush()
-    phone = "555-700-0001"
+    phone = "989-700-0001"
     contact = Contact(
         campaign_id=campaign.id,
         phone_number=phone,
@@ -93,7 +93,7 @@ def test_mixed_outcomes_produce_correct_intelligence_counts(client, db_session):
     ]
     scores = [80, 60, 40, 10, 0]
     for i, (interest, score) in enumerate(zip(interest_values, scores, strict=True)):
-        phone = f"555-700-01{i:02d}"
+        phone = f"989-700-01{i:02d}"
         contact = Contact(
             campaign_id=campaign.id,
             phone_number=phone,
@@ -135,7 +135,7 @@ def test_all_failures_produce_full_failure_rate(client, db_session):
     db_session.add(campaign)
     db_session.flush()
     for i in range(3):
-        phone = f"555-700-02{i:02d}"
+        phone = f"989-700-02{i:02d}"
         contact = Contact(
             campaign_id=campaign.id,
             phone_number=phone,

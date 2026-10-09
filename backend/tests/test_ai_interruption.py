@@ -14,7 +14,7 @@ from tests.ai_helpers import build_orchestrator, create_connected_call
 
 
 def test_barge_in_stops_outbound_audio(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0020")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0020")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -27,7 +27,7 @@ def test_stale_llm_response_is_discarded_after_barge_in(db_session):
     """Turn A's LLM call is in flight; a barge-in happens (bumping the
     generation) before turn A's output would be spoken. Turn A's output
     must never reach TTS/audio."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0021")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0021")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -51,7 +51,7 @@ def test_stale_llm_response_is_discarded_after_barge_in(db_session):
 
 
 def test_new_turn_after_interruption_is_processed_normally(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0022")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0022")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -66,7 +66,7 @@ def test_stale_response_discarded_during_tts_synthesis(db_session):
     """The response passed LLM/validation, but a barge-in happened
     while TTS was synthesizing it -- must still be discarded before
     reaching audio output."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0023")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0023")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 

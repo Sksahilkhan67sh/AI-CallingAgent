@@ -13,19 +13,34 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.core.config import get_settings
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus
 from app.repositories.suppression_repository import SuppressionRepository
+from app.services.calling_window import InvalidTimezoneError
+from app.services.phone import is_dialable_region
+from app.services.retry_policy_service import build_default_policy, window_is_open
 
 if TYPE_CHECKING:
     from app.models.retry_policy import RetryPolicy
+
+
+# Machine-readable reasons. The dialer treats TRANSIENT ones as "not now" (never acked and
+# lost); everything else that is not eligible is permanent for this job.
+OUTSIDE_WINDOW = "outside_calling_window"
+REGION_NOT_ALLOWED = "region_not_allowed"
 
 
 @dataclass
 class EligibilityResult:
     eligible: bool
     reason: str | None = None
+    code: str | None = None
+
+    @property
+    def transient(self) -> bool:
+        return self.code == OUTSIDE_WINDOW
 
 
 # Campaign states that can still accept members. A completed campaign
@@ -64,11 +79,12 @@ class DialEligibilityService:
     campaign may have been paused, the contact suppressed, or the
     calling window closed in the meantime.
 
-    Calling-window note (Step 7): no per-campaign timezone field exists
-    anywhere in the reconciled schema, so this compares against UTC --
-    documented as a known limitation in docs/CHECKPOINT-03-NOTES.md, not
-    silently assumed correct. A campaign with no `retry_policy` row (most
-    campaigns, since one isn't auto-created) has no window restriction.
+    Calling window (CP14): read in the CAMPAIGN's timezone via the shared
+    `calling_window` functions and clamped by the global hard bound. A campaign
+    with no `retry_policy` row is judged by the DEFAULT policy -- a missing row
+    never means "no window". The destination's region is re-checked against
+    ALLOWED_DIAL_REGIONS here too, so a legacy row written before the rule existed
+    cannot be dialed.
     """
 
     def __init__(self, suppressions: SuppressionRepository) -> None:
@@ -102,9 +118,20 @@ class DialEligibilityService:
         if self.suppressions.is_suppressed(contact.normalized_phone_number):
             return EligibilityResult(False, "Contact is suppressed")
 
-        if retry_policy is not None:
-            current_time = (now or datetime.now(UTC)).time()
-            if not (retry_policy.window_start <= current_time <= retry_policy.window_end):
-                return EligibilityResult(False, "Outside calling window")
+        if not is_dialable_region(
+            contact.normalized_phone_number, get_settings().allowed_dial_regions
+        ):
+            return EligibilityResult(
+                False, "Destination region is not allowed", REGION_NOT_ALLOWED
+            )
+
+        policy = retry_policy if retry_policy is not None else build_default_policy(campaign.id)
+        try:
+            open_now = window_is_open(campaign, policy, now or datetime.now(UTC))
+        except InvalidTimezoneError:
+            # A corrupt zone must never be guessed at: hold the work, do not dial.
+            return EligibilityResult(False, "Outside calling window", OUTSIDE_WINDOW)
+        if not open_now:
+            return EligibilityResult(False, "Outside calling window", OUTSIDE_WINDOW)
 
         return EligibilityResult(True)

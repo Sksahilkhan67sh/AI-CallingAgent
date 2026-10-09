@@ -28,7 +28,6 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus
 from app.services import kill_switch
-from app.services.phone import normalize_phone_number
 from app.services.queue import dialer_worker
 from app.services.queue.dialer_worker import JobOutcome, process_claimed_job, process_one_job
 from app.services.queue.enqueue_service import enqueue_guard_key
@@ -36,6 +35,7 @@ from app.services.queue.factory import get_queue
 from app.services.queue.job import DialJob
 from app.services.telephony.circuit_breaker import CircuitBreaker
 from tests.conftest import _bearer
+from tests.phone_helpers import normalize_phone_number
 from tests.test_cp11_concurrency import (
     N_WORKERS,
     _attempts_by_contact,
@@ -636,8 +636,8 @@ def _bulk_contacts(campaign_id, count):
         {
             "id": uuid.uuid4(),
             "campaign_id": campaign_id,
-            "phone_number": f"555-{i:07d}",
-            "normalized_phone_number": normalize_phone_number(f"555-{i:07d}") + f"-{i}",
+            "phone_number": f"989-{i:07d}",
+            "normalized_phone_number": normalize_phone_number(f"989-{i:07d}") + f"-{i}",
             "status": ContactStatus.PENDING,
         }
         for i in range(count)

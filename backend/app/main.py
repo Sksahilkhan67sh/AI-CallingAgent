@@ -14,6 +14,8 @@ from app.api.routes.admin_campaigns import router as admin_campaigns_router
 from app.api.routes.admin_contacts import router as admin_contacts_router
 from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.admin_kill_switch import router as admin_kill_switch_router
+from app.api.routes.admin_spend import router as admin_spend_router
+from app.api.routes.admin_suppressions import router as admin_suppressions_router
 from app.api.routes.call_analysis import router as call_analysis_router
 from app.api.routes.campaigns import router as campaigns_router
 from app.api.routes.contacts import router as contacts_router
@@ -65,6 +67,8 @@ app.include_router(call_analysis_router)
 app.include_router(admin_auth_router)
 app.include_router(admin_dashboard_router)
 app.include_router(admin_kill_switch_router)
+app.include_router(admin_suppressions_router)
+app.include_router(admin_spend_router)
 app.include_router(admin_campaigns_router)
 app.include_router(admin_contacts_router)
 app.include_router(admin_call_attempts_router)

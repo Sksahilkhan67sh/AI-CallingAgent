@@ -7,13 +7,13 @@ def test_create_contact(client):
 
     response = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "(555) 123-4567"},
+        json={"campaign_id": campaign_id, "phone_number": "(989) 123-4567"},
     )
 
     assert response.status_code == 201
     body = response.json()
     assert body["campaign_id"] == campaign_id
-    assert body["normalized_phone_number"] == "+15551234567"
+    assert body["normalized_phone_number"] == "+919891234567"
     assert body["status"] == "Pending"
     assert body["attempt_count"] == 0
 
@@ -22,7 +22,7 @@ def test_get_contact(client):
     campaign_id = _create_campaign(client)
     created = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "555-987-6543"},
+        json={"campaign_id": campaign_id, "phone_number": "989-987-6543"},
     ).json()
 
     response = client.get(f"/api/v1/contacts/{created['id']}")
@@ -39,14 +39,14 @@ def test_get_unknown_contact_returns_404(client):
 
 def test_duplicate_contact_in_same_campaign_is_rejected(client):
     campaign_id = _create_campaign(client)
-    payload = {"campaign_id": campaign_id, "phone_number": "555-111-2222"}
+    payload = {"campaign_id": campaign_id, "phone_number": "989-111-2222"}
     client.post("/api/v1/contacts", json=payload)
 
     # same number, different formatting -- must still collide on the
     # normalized representation
     response = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "(555) 111-2222"},
+        json={"campaign_id": campaign_id, "phone_number": "(989) 111-2222"},
     )
 
     assert response.status_code == 409
@@ -55,7 +55,7 @@ def test_duplicate_contact_in_same_campaign_is_rejected(client):
 def test_same_number_allowed_in_different_campaigns(client):
     campaign_a = _create_campaign(client)
     campaign_b = _create_campaign(client)
-    phone = "555-333-4444"
+    phone = "989-333-4444"
 
     first = client.post(
         "/api/v1/contacts", json={"campaign_id": campaign_a, "phone_number": phone}
@@ -83,7 +83,7 @@ def test_contact_for_unknown_campaign_returns_404(client):
         "/api/v1/contacts",
         json={
             "campaign_id": "00000000-0000-0000-0000-000000000000",
-            "phone_number": "555-999-1111",
+            "phone_number": "989-999-1111",
         },
     )
 
@@ -96,7 +96,7 @@ def test_suppressed_number_cannot_be_added_as_contact(client, db_session):
     from app.models.contact import Contact
     from app.models.enums import SuppressionSource
     from app.models.suppression import Suppression
-    from app.services.phone import normalize_phone_number
+    from tests.phone_helpers import normalize_phone_number
 
     campaign = Campaign(name="Suppression test campaign")
     db_session.add(campaign)
@@ -108,8 +108,8 @@ def test_suppressed_number_cannot_be_added_as_contact(client, db_session):
     # is by phone number, not by this placeholder's own id.
     placeholder_contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-777-8888",
-        normalized_phone_number=normalize_phone_number("555-777-8888"),
+        phone_number="989-777-8888",
+        normalized_phone_number=normalize_phone_number("989-777-8888"),
     )
     db_session.add(placeholder_contact)
     db_session.flush()
@@ -117,7 +117,7 @@ def test_suppressed_number_cannot_be_added_as_contact(client, db_session):
     db_session.add(
         Suppression(
             contact_id=placeholder_contact.id,
-            phone_number=normalize_phone_number("555-777-8888"),
+            phone_number=normalize_phone_number("989-777-8888"),
             reason="requested opt-out",
             source=SuppressionSource.MANUAL_API,
         )
@@ -127,7 +127,7 @@ def test_suppressed_number_cannot_be_added_as_contact(client, db_session):
     other_campaign_id = _create_campaign(client)
     response = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": other_campaign_id, "phone_number": "555-777-8888"},
+        json={"campaign_id": other_campaign_id, "phone_number": "989-777-8888"},
     )
 
     assert response.status_code == 409
@@ -138,7 +138,7 @@ def test_list_contacts_is_paginated(client):
     for i in range(3):
         client.post(
             "/api/v1/contacts",
-            json={"campaign_id": campaign_id, "phone_number": f"555-500-000{i}"},
+            json={"campaign_id": campaign_id, "phone_number": f"989-500-000{i}"},
         )
 
     response = client.get(f"/api/v1/contacts?campaign_id={campaign_id}&limit=2")
@@ -153,7 +153,7 @@ def test_list_contacts_filters_by_status(client):
     campaign_id = _create_campaign(client)
     created = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "555-600-0001"},
+        json={"campaign_id": campaign_id, "phone_number": "989-600-0001"},
     ).json()
 
     response = client.get(f"/api/v1/contacts?campaign_id={campaign_id}&status=Pending")
@@ -167,30 +167,30 @@ def test_update_contact_phone_number(client):
     campaign_id = _create_campaign(client)
     contact = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "555-700-0001"},
+        json={"campaign_id": campaign_id, "phone_number": "989-700-0001"},
     ).json()
 
     response = client.patch(
-        f"/api/v1/contacts/{contact['id']}", json={"phone_number": "555-700-0002"}
+        f"/api/v1/contacts/{contact['id']}", json={"phone_number": "989-700-0002"}
     )
 
     assert response.status_code == 200
-    assert response.json()["normalized_phone_number"] == "+15557000002"
+    assert response.json()["normalized_phone_number"] == "+919897000002"
 
 
 def test_update_contact_phone_to_existing_duplicate_is_rejected(client):
     campaign_id = _create_campaign(client)
     client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "555-800-0001"},
+        json={"campaign_id": campaign_id, "phone_number": "989-800-0001"},
     )
     contact_b = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "555-800-0002"},
+        json={"campaign_id": campaign_id, "phone_number": "989-800-0002"},
     ).json()
 
     response = client.patch(
-        f"/api/v1/contacts/{contact_b['id']}", json={"phone_number": "555-800-0001"}
+        f"/api/v1/contacts/{contact_b['id']}", json={"phone_number": "989-800-0001"}
     )
 
     assert response.status_code == 409
@@ -200,7 +200,7 @@ def test_deactivate_contact(client):
     campaign_id = _create_campaign(client)
     contact = client.post(
         "/api/v1/contacts",
-        json={"campaign_id": campaign_id, "phone_number": "555-900-0001"},
+        json={"campaign_id": campaign_id, "phone_number": "989-900-0001"},
     ).json()
 
     response = client.post(f"/api/v1/contacts/{contact['id']}/deactivate")

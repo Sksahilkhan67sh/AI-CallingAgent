@@ -22,8 +22,8 @@ from app.models.enums import (
     SuppressionSource,
 )
 from app.models.retry_policy import RetryPolicy
-from app.services.phone import normalize_phone_number
 from app.services.telephony.dograh_outcome import _VOCABULARY, classify_call_outcome
+from tests.phone_helpers import normalize_phone_number
 
 S = CallAttemptState
 
@@ -120,7 +120,7 @@ def _post(client, attempt, run_id, status):
 
 
 def test_unrecognized_status_is_audited_creates_no_session_and_uses_recovery(client, db_session):
-    contact, attempt = _attempt(db_session, "555-961-0001")
+    contact, attempt = _attempt(db_session, "989-961-0001")
 
     response = _post(client, attempt, 77, "mystery_status")
 
@@ -152,7 +152,7 @@ def test_unrecognized_status_is_audited_creates_no_session_and_uses_recovery(cli
 def test_unrecognized_status_still_respects_suppression(client, db_session):
     from app.models.suppression import Suppression
 
-    contact, attempt = _attempt(db_session, "555-961-0002")
+    contact, attempt = _attempt(db_session, "989-961-0002")
     db_session.add(
         Suppression(
             contact_id=contact.id,

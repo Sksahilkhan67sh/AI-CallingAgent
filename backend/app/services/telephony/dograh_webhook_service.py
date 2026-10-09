@@ -22,12 +22,12 @@ dropped mid-call / ended normally), not the two-way split Checkpoint
 """
 
 import logging
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -42,7 +42,7 @@ from app.models.enums import (
     SuppressionSource,
 )
 from app.models.processed_event import ProcessedEvent
-from app.models.suppression import Suppression
+from app.repositories.suppression_repository import SuppressionRepository
 from app.schemas.dograh_webhook import DograhWebhookPayload
 from app.services.analysis.admission import enqueue_call_analysis
 from app.services.audit_service import record_audit_event
@@ -78,26 +78,21 @@ class DograhWebhookResult:
 def _suppress_for_opt_out(
     db: Session, attempt: CallAttempt, contact: Contact, payload: DograhWebhookPayload
 ) -> None:
-    """CP13: durable, idempotent opt-out. `suppression.contact_id` is the primary key, so
-    ON CONFLICT DO NOTHING makes N concurrent/repeated opt-outs converge on one row with no
-    error and (because only the inserting call audits) no duplicate audit trail. Written to
+    """CP13: durable, idempotent opt-out. CP14: the conflict target is the normalized NUMBER
+    (global), not the contact: ON CONFLICT DO NOTHING makes N concurrent/repeated opt-outs
+    -- even from two contacts sharing a number -- converge on one row with no error and
+    (because only the inserting call audits) no duplicate audit trail. Written to
     PostgreSQL in the same transaction as the attempt outcome: if it fails, the webhook is
     not acknowledged and the event is not marked processed. Redis is never consulted.
 
     Evidence used is recorded verbatim in the audit row: the configured disposition code, not
     any transcript text and no phone number."""
-    # RETURNING, not rowcount: psycopg reports -1 for this statement, which is truthy.
-    inserted = db.execute(
-        pg_insert(Suppression)
-        .values(
-            contact_id=contact.id,
-            phone_number=contact.normalized_phone_number,
-            reason="opt-out via Dograh call disposition",
-            source=SuppressionSource.AGENT_IN_CALL,
-        )
-        .on_conflict_do_nothing(index_elements=[Suppression.contact_id])
-        .returning(Suppression.contact_id)
-    ).first()
+    inserted = SuppressionRepository(db).insert_if_absent(
+        contact.normalized_phone_number,
+        source=SuppressionSource.AGENT_IN_CALL,
+        reason="opt-out via Dograh call disposition",
+        contact_id=contact.id,
+    )
     contact.status = ContactStatus.CLOSED
     db.flush()
     if inserted is not None:
@@ -118,6 +113,23 @@ def _suppress_for_opt_out(
             "opt_out_suppressed",
             extra={"attempt_id": str(attempt.id), "campaign_id": str(contact.campaign_id)},
         )
+
+
+_MAX_DURATION_SECONDS = 24 * 3600.0
+
+
+def _parse_duration(value: float | str | None) -> float | None:
+    """CP14: the provider-reported call length, for the spend ESTIMATE only. Untrusted input:
+    anything non-numeric, non-finite or negative is treated as unknown (None), and a huge
+    value is capped at a day, so a bad payload can neither crash the webhook nor skew the
+    estimate without bound."""
+    try:
+        seconds = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return min(seconds, _MAX_DURATION_SECONDS)
 
 
 def _already_processed(payload: DograhWebhookPayload) -> "DograhWebhookResult":
@@ -313,6 +325,10 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
         # later writes the same value, so the order of the two is irrelevant.
         attempt.provider = "dograh"
         attempt.provider_call_id = str(payload.workflow_run_id)
+
+    duration = _parse_duration(payload.duration_seconds)
+    if duration is not None:
+        attempt.duration_seconds = duration
 
     if unresolved_ambiguous:
         reopen_for_adoption(attempt, contact)

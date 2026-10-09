@@ -19,10 +19,10 @@ from app.models.enums import (
     ContactStatus,
     NeverConnectedFailureReason,
 )
-from app.services.phone import normalize_phone_number
 from app.services.telephony.dograh_outcome import classify_call_outcome as _normalize
 from app.services.telephony.dograh_reconciliation import AMBIGUOUS_TRIGGER_EVENT
 from app.services.telephony.dograh_webhook_service import _is_safe_transcript_url
+from tests.phone_helpers import normalize_phone_number
 
 S = CallAttemptState
 URL = "/api/v1/webhooks/dograh/call-completed"
@@ -149,7 +149,7 @@ def _audits(db, action):
 def test_conflicting_webhook_creates_no_session_no_analysis_and_goes_to_recovery(
     client, db_session
 ):
-    _, contact, attempt = _attempt(db_session, phone="555-980-0001")
+    _, contact, attempt = _attempt(db_session, phone="989-980-0001")
 
     response = _post(client, attempt, workflow_run_id=99, call_disposition="no_answer")
 
@@ -168,7 +168,7 @@ def test_conflicting_webhook_creates_no_session_no_analysis_and_goes_to_recovery
 
 
 def test_unknown_status_webhook_is_never_a_successful_completion(client, db_session):
-    _, contact, attempt = _attempt(db_session, phone="555-980-0002")
+    _, contact, attempt = _attempt(db_session, phone="989-980-0002")
 
     response = _post(client, attempt, workflow_run_id=99, call_status="brand_new_value")
     assert response.status_code == 200
@@ -180,7 +180,7 @@ def test_unknown_status_webhook_is_never_a_successful_completion(client, db_sess
 
 
 def test_matching_correlation_ids_are_accepted(client, db_session):
-    campaign, contact, attempt = _attempt(db_session, phone="555-980-0003")
+    campaign, contact, attempt = _attempt(db_session, phone="989-980-0003")
     response = _post(
         client,
         attempt,
@@ -202,7 +202,7 @@ def test_matching_correlation_ids_are_accepted(client, db_session):
 def test_wrong_correlation_is_rejected_audited_and_mutates_nothing(
     client, db_session, fields, problem
 ):
-    _, contact, attempt = _attempt(db_session, phone="555-980-0004")
+    _, contact, attempt = _attempt(db_session, phone="989-980-0004")
 
     response = _post(client, attempt, **fields)
 
@@ -221,21 +221,21 @@ def test_wrong_correlation_is_rejected_audited_and_mutates_nothing(
 
 
 def test_wrong_run_cannot_touch_an_already_terminal_attempt_either(client, db_session):
-    _, _, attempt = _attempt(db_session, phone="555-980-0005", state=S.ENDED_NORMALLY)
+    _, _, attempt = _attempt(db_session, phone="989-980-0005", state=S.ENDED_NORMALLY)
     assert _post(client, attempt, workflow_run_id=555).status_code == 409
     assert _audits(db_session, "dograh.webhook_correlation_rejected") == 1
 
 
 def test_a_dograh_webhook_cannot_mutate_a_native_provider_attempt(client, db_session):
-    _, _, attempt = _attempt(db_session, phone="555-980-0006", run_id="mock-1", provider="mock")
+    _, _, attempt = _attempt(db_session, phone="989-980-0006", run_id="mock-1", provider="mock")
     assert _post(client, attempt).status_code == 409
     db_session.refresh(attempt)
     assert attempt.state == S.INITIATED
 
 
 def test_a_run_already_owned_by_another_attempt_cannot_be_adopted(client, db_session):
-    campaign, _, owner = _attempt(db_session, phone="555-980-0007", run_id="77")
-    _, _, other = _attempt(db_session, phone="555-980-0008", run_id=None, campaign=campaign)
+    campaign, _, owner = _attempt(db_session, phone="989-980-0007", run_id="77")
+    _, _, other = _attempt(db_session, phone="989-980-0008", run_id=None, campaign=campaign)
 
     assert _post(client, other, workflow_run_id=77).status_code == 409
 
@@ -246,7 +246,7 @@ def test_a_run_already_owned_by_another_attempt_cannot_be_adopted(client, db_ses
 def test_completion_webhook_arriving_before_trigger_response_is_handled(client, db_session):
     """Webhook race: the attempt was claimed (INITIATED, no run id yet) when the
     completion webhook lands. It must complete the attempt AND remember the run."""
-    _, _, attempt = _attempt(db_session, phone="555-980-0009", run_id=None, provider=None)
+    _, _, attempt = _attempt(db_session, phone="989-980-0009", run_id=None, provider=None)
 
     response = _post(client, attempt, workflow_run_id=4242)
 
@@ -257,7 +257,7 @@ def test_completion_webhook_arriving_before_trigger_response_is_handled(client, 
 
 
 def test_duplicate_webhook_is_a_noop_and_creates_one_analysis(client, db_session):
-    _, contact, attempt = _attempt(db_session, phone="555-980-0010")
+    _, contact, attempt = _attempt(db_session, phone="989-980-0010")
 
     first = _post(client, attempt, workflow_run_id=99)
     second = _post(client, attempt, workflow_run_id=99)
@@ -270,7 +270,7 @@ def test_duplicate_webhook_is_a_noop_and_creates_one_analysis(client, db_session
 def test_webhook_after_ambiguous_trigger_adopts_the_run_without_a_second_call(client, db_session):
     """CP09 reconciliation protection still holds under the CP10 correlation checks."""
     _, contact, attempt = _attempt(
-        db_session, phone="555-980-0011", run_id=None, state=S.FAILED_TO_CONNECT
+        db_session, phone="989-980-0011", run_id=None, state=S.FAILED_TO_CONNECT
     )
     attempt.provider = "dograh"
     db_session.add(CallEvent(call_attempt_id=attempt.id, event_type=AMBIGUOUS_TRIGGER_EVENT))
@@ -291,7 +291,7 @@ def test_unauthenticated_caller_gets_401_not_schema_feedback(client, db_session)
 
 
 def test_non_ascii_credential_is_a_clean_401(client, db_session):
-    _, _, attempt = _attempt(db_session, phone="555-980-0012")
+    _, _, attempt = _attempt(db_session, phone="989-980-0012")
     response = client.post(
         URL,
         json={"call_attempt_id": str(attempt.id), "call_status": "user_hangup"},
@@ -301,7 +301,7 @@ def test_non_ascii_credential_is_a_clean_401(client, db_session):
 
 
 def test_malformed_authenticated_payload_mutates_nothing(client, db_session):
-    _, _, attempt = _attempt(db_session, phone="555-980-0013")
+    _, _, attempt = _attempt(db_session, phone="989-980-0013")
     response = client.post(
         URL,
         json={"call_attempt_id": str(attempt.id), "recording_url": "file:///etc/passwd"},

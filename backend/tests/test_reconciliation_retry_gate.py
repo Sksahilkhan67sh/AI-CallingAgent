@@ -467,7 +467,11 @@ def test_14_calling_window_closed_no_lookup_no_trigger(fake, redis_client, provi
     )
     outcome = _process(sc, redis_client, provider, sc.queue.read_one("w3", 100))
 
-    assert outcome == JobOutcome.NOT_ELIGIBLE
+    # CP14 (C5a): a closed calling window is "not now", not "not eligible". The old outcome
+    # (NOT_ELIGIBLE) was ACKED, i.e. the retry was dropped. Now the job is held unacked until
+    # the window opens. The point of this test is unchanged: no lookup, no trigger.
+    assert outcome == JobOutcome.WINDOW_HELD
+    assert _pending(sc.queue) == 1
     assert fake.calls == 1 and fake.reconcile_calls == 1
 
 

@@ -13,7 +13,7 @@ from tests.ai_helpers import build_orchestrator, create_connected_call
 
 
 def test_full_conversation_greeting_interest_qualification_close(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-960-0001")
+    _, contact, attempt = create_connected_call(db_session, phone="989-960-0001")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -55,7 +55,7 @@ def test_full_conversation_greeting_interest_qualification_close(db_session):
 
 
 def test_conversation_ends_with_correct_call_attempt_state(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-960-0002")
+    _, contact, attempt = create_connected_call(db_session, phone="989-960-0002")
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -69,7 +69,7 @@ def test_conversation_ends_with_correct_call_attempt_state(db_session):
 def test_latency_instrumentation_measures_a_turn(db_session):
     """Step 52: validates instrumentation and timeout behavior against
     a mock -- does not claim production latency guarantees."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-960-0003")
+    _, contact, attempt = create_connected_call(db_session, phone="989-960-0003")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -85,7 +85,7 @@ def test_conversation_via_full_audio_stt_loop_not_direct_orchestrator_call(db_se
     """Drives the conversation through the actual audio/STT plumbing
     (simulate_inbound_audio -> STT -> orchestrator), not by calling
     handle_final_utterance directly, to exercise the wiring itself."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-960-0004")
+    _, contact, attempt = create_connected_call(db_session, phone="989-960-0004")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 

@@ -98,7 +98,7 @@ def test_provider_failure_is_recorded_acked_counted_and_never_retriggered(
     db_session, redis_client, provider, monkeypatch, status, category
 ):
     _with_dograh_engine(monkeypatch)
-    campaign, contact = _setup(db_session, phone=f"555-990-{status:04d}"[:12])
+    campaign, contact = _setup(db_session, phone=f"989-990-{status:04d}"[:12])
     fake = _CountingClient(error=DograhApiError(status, "boom", category=category))
 
     outcome = _deliver(
@@ -134,7 +134,7 @@ def test_unexpected_exception_leaves_job_pending_and_never_retriggers(
 
     _with_dograh_engine(monkeypatch)
     setup = _Session()
-    campaign, contact = _setup(setup, phone="555-991-0001")
+    campaign, contact = _setup(setup, phone="989-991-0001")
     setup.commit()
     fake = _CountingClient(error=RuntimeError("unclassified bug"))
 
@@ -164,7 +164,7 @@ def test_configuration_error_is_audited_and_does_not_strand_the_contact(
     db_session, redis_client, provider, monkeypatch
 ):
     _with_dograh_engine(monkeypatch)
-    campaign, contact = _setup(db_session, phone="555-991-0002")
+    campaign, contact = _setup(db_session, phone="989-991-0002")
 
     def _unconfigured():
         raise DograhConfigurationError("DOGRAH_API_KEY and DOGRAH_TRIGGER_UUID must both be set")
@@ -190,7 +190,7 @@ def test_open_circuit_blocks_the_trigger_and_leaves_the_job_for_later(
     """Rate-limit storms: after the breaker opens, admission refuses the job --
     no trigger, no ack, no new attempt row."""
     _with_dograh_engine(monkeypatch)
-    campaign, contact = _setup(db_session, phone="555-991-0003")
+    campaign, contact = _setup(db_session, phone="989-991-0003")
     breaker = CircuitBreaker(redis_client, "dograh")
     for _ in range(breaker.error_threshold):
         breaker.record_failure()
@@ -210,7 +210,7 @@ def test_accepted_trigger_is_initiated_not_connected_and_records_the_run(
     db_session, redis_client, provider, monkeypatch
 ):
     _with_dograh_engine(monkeypatch)
-    campaign, contact = _setup(db_session, phone="555-991-0004")
+    campaign, contact = _setup(db_session, phone="989-991-0004")
     fake = _CountingClient(result=DograhTriggerResult(8123, "WR-8123"))
 
     _deliver(db_session, redis_client, provider, monkeypatch, campaign, contact, lambda: fake)
@@ -237,7 +237,7 @@ def test_rate_limit_responses_cannot_become_a_retry_storm(
     fake = _CountingClient(error=DograhApiError(429, "slow down", category=C.RATE_LIMITED))
     outcomes = []
     for i in range(threshold + 3):
-        campaign, contact = _setup(db_session, phone=f"555-992-{i:04d}")
+        campaign, contact = _setup(db_session, phone=f"989-992-{i:04d}")
         outcomes.append(
             _deliver(
                 db_session, redis_client, provider, monkeypatch, campaign, contact, lambda: fake

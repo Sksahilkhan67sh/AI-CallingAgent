@@ -28,14 +28,14 @@ from app.models.conversation import ConversationSession
 from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus
 from app.models.processed_event import ProcessedEvent
 from app.models.retry_policy import RetryPolicy
-from app.services.phone import normalize_phone_number
 from app.services.recovery.factory import get_recovery_scheduler
+from tests.phone_helpers import normalize_phone_number
 
 _Session = sessionmaker(bind=create_engine(os.environ["PRIMARY_DB_URL"]))
 
 
 def _committed_attempt(run_id: int) -> tuple[str, str]:
-    phone = f"555-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
+    phone = f"989-{random.randint(100, 999)}-{random.randint(1000, 9999)}"
     with _Session() as s:
         campaign = Campaign(name="webhook race test", status=CampaignStatus.ACTIVE)
         s.add(campaign)

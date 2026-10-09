@@ -12,10 +12,10 @@ from app.models.contact import Contact
 from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus
 from app.models.processed_event import ProcessedEvent
 from app.schemas.dograh_webhook import DograhWebhookPayload
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
-def _initiated_call(db_session, *, phone="555-970-0001"):
+def _initiated_call(db_session, *, phone="989-970-0001"):
     """Checkpoint 09 §2: a triggered-but-not-yet-resolved Dograh call
     sits at CallAttempt's default INITIATED state, not CONNECTED --
     this fixture matches that corrected reality."""
@@ -52,7 +52,7 @@ def test_never_answered_status_is_classified_as_never_connected(client, db_sessi
     whether a call actually connected -- 'no_answer' must route through
     the never-connected recovery path, not be treated as a completed
     conversation."""
-    _, contact, attempt = _initiated_call(db_session, phone="555-970-0002")
+    _, contact, attempt = _initiated_call(db_session, phone="989-970-0002")
 
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
@@ -74,7 +74,7 @@ def test_never_answered_status_is_classified_as_never_connected(client, db_sessi
 
 
 def test_busy_status_maps_to_busy_reason(client, db_session):
-    _, _, attempt = _initiated_call(db_session, phone="555-970-0003")
+    _, _, attempt = _initiated_call(db_session, phone="989-970-0003")
 
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
@@ -92,7 +92,7 @@ def test_never_connected_call_gets_no_conversation_session(client, db_session):
     ConversationSession should be created for it."""
     from app.models.conversation import ConversationSession
 
-    _, _, attempt = _initiated_call(db_session, phone="555-970-0004")
+    _, _, attempt = _initiated_call(db_session, phone="989-970-0004")
 
     client.post(
         "/api/v1/webhooks/dograh/call-completed",
@@ -117,7 +117,7 @@ def test_duplicate_workflow_run_id_is_a_processed_event_noop(client, db_session)
     own event identity), reusing the existing ProcessedEvent model --
     a genuinely duplicate delivery is a no-op even before the
     attempt-state check runs."""
-    _, _, attempt = _initiated_call(db_session, phone="555-970-0005")
+    _, _, attempt = _initiated_call(db_session, phone="989-970-0005")
     payload = {
         "call_attempt_id": str(attempt.id),
         "workflow_run_id": 99,
@@ -144,7 +144,7 @@ def test_duplicate_workflow_run_id_is_a_processed_event_noop(client, db_session)
 def test_missing_workflow_run_id_falls_back_to_call_attempt_id_for_event_identity(
     client, db_session
 ):
-    _, _, attempt = _initiated_call(db_session, phone="555-970-0006")
+    _, _, attempt = _initiated_call(db_session, phone="989-970-0006")
     payload = {"call_attempt_id": str(attempt.id), "call_status": "user_hangup"}
 
     response = client.post(
@@ -161,7 +161,7 @@ def test_missing_workflow_run_id_falls_back_to_call_attempt_id_for_event_identit
 
 
 def test_payload_rejects_non_http_recording_url(client, db_session):
-    _, _, attempt = _initiated_call(db_session, phone="555-970-0007")
+    _, _, attempt = _initiated_call(db_session, phone="989-970-0007")
 
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",
@@ -200,7 +200,7 @@ def test_payload_tolerates_unknown_extra_fields(client, db_session):
     """Dograh's own payload_template is user-configurable and may grow
     new variables over time -- this integration must not hard-fail on
     fields it doesn't recognize yet."""
-    _, _, attempt = _initiated_call(db_session, phone="555-970-0008")
+    _, _, attempt = _initiated_call(db_session, phone="989-970-0008")
 
     response = client.post(
         "/api/v1/webhooks/dograh/call-completed",

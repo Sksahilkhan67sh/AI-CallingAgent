@@ -15,13 +15,13 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus, MidCallDisconnectReason
 from app.models.retry_policy import RetryPolicy
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import process_one_job
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.recovery.dispatch import dispatch_due_recovery_jobs
 from app.services.recovery.scheduler import RecoveryScheduler
 from app.services.telephony.circuit_breaker import CircuitBreaker
+from tests.phone_helpers import normalize_phone_number
 
 _engine = create_engine(os.environ["PRIMARY_DB_URL"])
 _Session = sessionmaker(bind=_engine)
@@ -97,8 +97,8 @@ def test_full_disconnect_retry_reconnect_cycle_through_real_worker(redis_client,
     )
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-993-0001",
-        normalized_phone_number=normalize_phone_number("555-993-0001"),
+        phone_number="989-993-0001",
+        normalized_phone_number=normalize_phone_number("989-993-0001"),
         status=ContactStatus.IN_CONVERSATION,
     )
     session.add(contact)
@@ -178,7 +178,7 @@ def test_opt_out_cancels_pending_recovery(db_session, redis_client):
     ever scheduled for it."""
     from tests.ai_helpers import build_orchestrator, create_connected_call
 
-    campaign, contact, attempt = create_connected_call(db_session, phone="555-993-0002")
+    campaign, contact, attempt = create_connected_call(db_session, phone="989-993-0002")
     db_session.add(RetryPolicy(campaign_id=campaign.id))
     db_session.flush()
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
@@ -196,7 +196,7 @@ def test_max_attempts_reached_produces_no_fourth_attempt(db_session, redis_clien
     from app.services.recovery.manager import RecoveryManager
     from tests.ai_helpers import create_connected_call
 
-    campaign, contact, first_attempt = create_connected_call(db_session, phone="555-993-0003")
+    campaign, contact, first_attempt = create_connected_call(db_session, phone="989-993-0003")
     db_session.add(RetryPolicy(campaign_id=campaign.id))
     db_session.flush()
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
