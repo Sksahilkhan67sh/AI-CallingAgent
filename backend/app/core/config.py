@@ -13,9 +13,12 @@ deployments must override these via real environment variables / a
 secrets manager -- never via committed files.
 """
 
+from datetime import time
 from functools import lru_cache
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import phonenumbers
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -220,11 +223,112 @@ class Settings(BaseSettings):
     # the middle -- see app/services/analysis/transcript.py.
     analysis_max_transcript_messages: int = 200
 
+    # --- Compliance basics + daily spend cap (Checkpoint 14) ---
+    # Single-tenant: one default region / timezone for the whole system; a campaign may
+    # override both at creation. Numbers written without a country code are read in the
+    # campaign's region; dialing is only allowed to ALLOWED_DIAL_REGIONS (JSON list in env).
+    default_region: str = "IN"
+    default_timezone: str = "Asia/Kolkata"
+    allowed_dial_regions: list[str] = ["IN"]
+
+    # Compliance backstop: no campaign window may extend beyond this, in the campaign's own
+    # timezone. NOT legal advice -- a conservative default pending the owner's legal review.
+    hard_calling_window_start: time = time(9, 0)
+    hard_calling_window_end: time = time(21, 0)
+    # Defaults for a campaign's RetryPolicy (a campaign created without one, and legacy
+    # campaigns that have no row). PRODUCT DECISIONS -- see docs/CHECKPOINT-14-NOTES.md.
+    default_calling_window_start: time = time(9, 0)
+    default_calling_window_end: time = time(21, 0)
+    default_max_retries: int = 2
+    default_retry_spacing_seconds: list[int] = [3600, 14400]
+    max_retries_ceiling: int = 5
+    min_retry_backoff_seconds: int = 300
+    max_retry_backoff_seconds: int = 604_800  # 7 days
+
+    # Daily spend cap. All figures are ESTIMATES, not billing: the provider-side limit in
+    # Dograh remains the real backstop. 0 blocks all dialing. The day is BUDGET_TIMEZONE's.
+    daily_dial_cap: int = 1000
+    daily_estimated_spend_cap: float | None = None
+    estimated_cost_per_minute: float | None = None
+    # Attempts with no recorded duration are counted as this many minutes.
+    estimated_minutes_per_unknown_attempt: float = 1.0
+    budget_timezone: str = "Asia/Kolkata"
+    # In-process cache of the budget check: overshoot is bounded by this TTL plus the
+    # number of dials in flight at once (see docs/CHECKPOINT-14-NOTES.md).
+    budget_check_cache_ttl_seconds: float = 2.0
+
     # --- Provider/voice config validation (Checkpoint 10) ---
     # Every value below is a closed set whose typo would otherwise fail
     # OPEN: an unknown ENVIRONMENT skips the production checks entirely, an
     # unknown CALLING_ENGINE silently runs the native/mock engine, and an
     # unknown DOGRAH_TRIGGER_MODE silently hits Dograh's /test/ endpoint.
+    @model_validator(mode="after")
+    def _validate_cp14_config(self) -> "Settings":
+        problems: list[str] = []
+
+        # A timezone that cannot load (missing tzdata, typo) must stop the boot: falling
+        # back to a fixed UTC offset would silently move every calling window.
+        for name in ("default_timezone", "budget_timezone"):
+            try:
+                ZoneInfo(getattr(self, name))
+            except (ZoneInfoNotFoundError, ValueError, OSError):
+                problems.append(f"{name.upper()} is not a loadable IANA timezone")
+
+        supported = phonenumbers.SUPPORTED_REGIONS
+        self.default_region = self.default_region.upper()
+        self.allowed_dial_regions = [r.upper() for r in self.allowed_dial_regions]
+        if self.default_region not in supported:
+            problems.append("DEFAULT_REGION must be a valid ISO 3166-1 alpha-2 region code")
+        if not self.allowed_dial_regions or any(
+            r not in supported for r in self.allowed_dial_regions
+        ):
+            problems.append("ALLOWED_DIAL_REGIONS must be a non-empty list of valid region codes")
+        elif self.default_region not in self.allowed_dial_regions:
+            problems.append("DEFAULT_REGION must be one of ALLOWED_DIAL_REGIONS")
+
+        if self.hard_calling_window_start >= self.hard_calling_window_end:
+            problems.append("HARD_CALLING_WINDOW_START must be before HARD_CALLING_WINDOW_END")
+        if self.default_calling_window_start == self.default_calling_window_end:
+            problems.append("DEFAULT_CALLING_WINDOW_START and _END must differ")
+
+        if not 0 <= self.default_max_retries <= self.max_retries_ceiling:
+            problems.append("DEFAULT_MAX_RETRIES must be between 0 and MAX_RETRIES_CEILING")
+        if len(self.default_retry_spacing_seconds) != self.default_max_retries:
+            problems.append("DEFAULT_RETRY_SPACING_SECONDS must have DEFAULT_MAX_RETRIES entries")
+        if any(
+            not self.min_retry_backoff_seconds <= s <= self.max_retry_backoff_seconds
+            for s in self.default_retry_spacing_seconds
+        ):
+            problems.append(
+                "DEFAULT_RETRY_SPACING_SECONDS entries must lie within "
+                "MIN_RETRY_BACKOFF_SECONDS..MAX_RETRY_BACKOFF_SECONDS"
+            )
+
+        if self.daily_dial_cap < 0:
+            problems.append("DAILY_DIAL_CAP must be >= 0")
+        for name in (
+            "daily_estimated_spend_cap",
+            "estimated_cost_per_minute",
+        ):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                problems.append(f"{name.upper()} must be >= 0")
+        if (self.daily_estimated_spend_cap is None) != (self.estimated_cost_per_minute is None):
+            problems.append(
+                "DAILY_ESTIMATED_SPEND_CAP and ESTIMATED_COST_PER_MINUTE must be set together"
+            )
+        if self.estimated_minutes_per_unknown_attempt < 0:
+            problems.append("ESTIMATED_MINUTES_PER_UNKNOWN_ATTEMPT must be >= 0")
+        if self.budget_check_cache_ttl_seconds < 0:
+            problems.append("BUDGET_CHECK_CACHE_TTL_SECONDS must be >= 0")
+
+        if problems:
+            raise ValueError(
+                "Invalid compliance/spend configuration:\n  - " + "\n  - ".join(problems)
+            )
+        return self
+
+
     @model_validator(mode="after")
     def _validate_provider_config(self) -> "Settings":
         problems: list[str] = []

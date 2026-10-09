@@ -12,6 +12,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError
 from app.models.contact import Contact
 from app.models.enums import ContactStatus
@@ -20,6 +21,7 @@ from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
 from app.services.audit_service import record_audit_event
 from app.services.eligibility_service import CampaignEligibilityService
+from app.services.phone import InvalidPhoneError, normalize_phone
 
 _ACTOR = "api-client"
 
@@ -47,17 +49,27 @@ class CampaignContactService:
             raise ConflictError(result.reason or "Contact is not eligible for campaign")
 
         if contact.campaign_id != campaign_id:
+            # Re-validated through the shared normalizer against the TARGET campaign: a
+            # legacy row written before the region rule must not be moved into rotation.
+            try:
+                canonical = normalize_phone(
+                    contact.normalized_phone_number,
+                    campaign.default_region,
+                    get_settings().allowed_dial_regions,
+                ).e164
+            except InvalidPhoneError as exc:
+                raise ConflictError(f"Contact phone number is not dialable ({exc.code})") from None
             existing = self.contacts.get_by_campaign_and_normalized_phone(
-                campaign_id, contact.normalized_phone_number
+                campaign_id, canonical
             )
             if existing is not None and existing.id != contact.id:
                 raise ConflictError(
-                    f"A contact with phone number {contact.normalized_phone_number} "
-                    f"already exists in campaign {campaign_id}"
+                    f"A contact with this phone number already exists in campaign {campaign_id}"
                 )
 
             old_campaign_id = contact.campaign_id
             contact.campaign_id = campaign_id
+            contact.normalized_phone_number = canonical
             contact.status = ContactStatus.PENDING
             self.db.flush()
             record_audit_event(

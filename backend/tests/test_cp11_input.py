@@ -72,7 +72,7 @@ def test_unicode_campaign_name_round_trips(client, text):
 
 
 def test_unicode_in_csv_import_is_processed(client):
-    csv_bytes = "name,phone_number\nरोशन,+14155550100\n".encode("utf-8-sig")
+    csv_bytes = "name,phone_number\nरोशन,+919845550100\n".encode("utf-8-sig")
     response = client.post(
         "/api/v1/campaigns/import",
         data={"name": "अभियान 🚀"},
@@ -84,7 +84,7 @@ def test_unicode_in_csv_import_is_processed(client):
 
 @pytest.mark.parametrize("encoding", ["utf-16", "latin-1"])
 def test_non_utf8_csv_is_a_client_error_not_500(client, encoding):
-    body = "phone_number\né+14155550100\n".encode(encoding)
+    body = "phone_number\né+919845550100\n".encode(encoding)
     response = client.post(
         "/api/v1/campaigns/import", data={"name": "x"}, files={"file": ("c.csv", body)}
     )
@@ -131,7 +131,7 @@ def test_lone_surrogate_in_any_json_string_field_is_422_not_500(client):
 
 
 def test_validation_errors_do_not_echo_request_input(client):
-    secret = "+14155550123-not-a-phone"
+    secret = "+919845550123-not-a-phone"
     response = client.post(
         "/api/v1/contacts", json={"campaign_id": "not-a-uuid", "phone_number": secret}
     )

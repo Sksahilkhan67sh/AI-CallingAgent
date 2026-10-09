@@ -12,10 +12,10 @@ from app.models.enums import (
     ContactStatus,
     InterestStatus,
 )
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
-def _analysis(db_session, *, phone="555-400-0001", status=AnalysisStatus.COMPLETED):
+def _analysis(db_session, *, phone="989-400-0001", status=AnalysisStatus.COMPLETED):
     campaign = Campaign(name="CP06 api test")
     db_session.add(campaign)
     db_session.flush()
@@ -72,7 +72,7 @@ def test_get_analysis_by_call_attempt_404_when_missing(client, db_session):
 
 
 def test_get_latest_analysis_by_contact(client, db_session):
-    _, contact, _, analysis = _analysis(db_session, phone="555-400-0002")
+    _, contact, _, analysis = _analysis(db_session, phone="989-400-0002")
 
     response = client.get(f"/api/v1/contacts/{contact.id}/analysis")
 
@@ -81,7 +81,7 @@ def test_get_latest_analysis_by_contact(client, db_session):
 
 
 def test_list_analysis_by_campaign_is_paginated(client, db_session):
-    campaign, _, _, _ = _analysis(db_session, phone="555-400-0003")
+    campaign, _, _, _ = _analysis(db_session, phone="989-400-0003")
 
     response = client.get(f"/api/v1/campaigns/{campaign.id}/analysis")
 
@@ -93,7 +93,7 @@ def test_list_analysis_by_campaign_is_paginated(client, db_session):
 
 def test_pending_analysis_exposes_status_without_results(client, db_session):
     _, _, attempt, analysis = _analysis(
-        db_session, phone="555-400-0004", status=AnalysisStatus.PENDING
+        db_session, phone="989-400-0004", status=AnalysisStatus.PENDING
     )
 
     response = client.get(f"/api/v1/call-attempts/{attempt.id}/analysis")

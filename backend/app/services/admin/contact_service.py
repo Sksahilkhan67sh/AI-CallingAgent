@@ -7,11 +7,10 @@ which ContactResponse (the existing public schema) doesn't carry.
 
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.campaign import Campaign
-from app.models.suppression import Suppression
+from app.repositories.suppression_repository import SuppressionRepository
 from app.schemas.admin import ContactDetail, ContactListItem
 from app.services.contact_service import ContactService
 from app.services.phone import mask_phone_number
@@ -23,13 +22,8 @@ def list_contacts(
     items, total = ContactService(db).list_contacts(
         campaign_id=campaign_id, status=status, limit=limit, offset=offset
     )
-    contact_ids = [c.id for c in items]
-    suppressed_ids = set(
-        db.execute(
-            select(Suppression.contact_id).where(Suppression.contact_id.in_(contact_ids))
-        )
-        .scalars()
-        .all()
+    suppressed_numbers = SuppressionRepository(db).suppressed_among(
+        {c.normalized_phone_number for c in items}
     )
     return [
         ContactListItem(
@@ -38,7 +32,7 @@ def list_contacts(
             phone_masked=mask_phone_number(c.normalized_phone_number),
             status=c.status,
             attempt_count=c.attempt_count,
-            suppressed=c.id in suppressed_ids,
+            suppressed=c.normalized_phone_number in suppressed_numbers,
             created_at=c.created_at,
         )
         for c in items
@@ -48,7 +42,7 @@ def list_contacts(
 def get_contact_detail(db: Session, contact_id: uuid.UUID) -> ContactDetail:
     contact = ContactService(db).get_contact(contact_id)  # raises NotFoundError
     campaign = db.get(Campaign, contact.campaign_id)
-    suppression = db.get(Suppression, contact.id)
+    suppression = SuppressionRepository(db).get_by_phone(contact.normalized_phone_number)
 
     return ContactDetail(
         id=contact.id,

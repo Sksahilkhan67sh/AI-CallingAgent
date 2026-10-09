@@ -19,7 +19,7 @@ from app.services.analysis.worker import (
     process_claimed_job,
     process_one_analysis_job,
 )
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def _admitted(db_session, *, phone, contact_text="I'm interested, tell me more"):
@@ -64,7 +64,7 @@ def _admitted(db_session, *, phone, contact_text="I'm interested, tell me more")
 
 
 def test_worker_completes_analysis_on_valid_llm_response(db_session, redis_client):
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0001")
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0001")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
 
@@ -84,7 +84,7 @@ def test_worker_completes_analysis_on_valid_llm_response(db_session, redis_clien
 
 
 def test_worker_handles_empty_transcript_without_calling_llm(db_session, redis_client):
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0002", contact_text=None)
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0002", contact_text=None)
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
 
@@ -101,7 +101,7 @@ def test_worker_handles_empty_transcript_without_calling_llm(db_session, redis_c
 
 
 def test_worker_on_llm_timeout_leaves_job_unacked_for_retry(db_session, redis_client):
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0003")
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0003")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
     llm.force_timeout = True
@@ -122,7 +122,7 @@ def test_worker_on_llm_timeout_leaves_job_unacked_for_retry(db_session, redis_cl
 
 
 def test_worker_on_provider_error_retries_then_terminally_fails(db_session, redis_client):
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0004")
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0004")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
     llm.force_error = True
@@ -148,7 +148,7 @@ def test_worker_on_provider_error_retries_then_terminally_fails(db_session, redi
 
 
 def test_malformed_llm_output_does_not_get_persisted_as_valid(db_session, redis_client):
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0005")
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0005")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
     llm.force_malformed = True
@@ -168,7 +168,7 @@ def test_already_completed_analysis_is_a_no_op_on_redelivery(db_session, redis_c
     """§6/§32.B/§32.H -- duplicate delivery of an already-COMPLETED
     analysis (e.g. a crash between persistence and ack) must not
     reprocess or re-call the LLM."""
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0006")
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0006")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
 
@@ -189,7 +189,7 @@ def test_already_completed_analysis_is_a_no_op_on_redelivery(db_session, redis_c
 
 
 def test_reclaim_stale_redelivers_an_unacked_job_to_another_worker(db_session, redis_client):
-    _, contact, attempt, _ = _admitted(db_session, phone="555-300-0007")
+    _, contact, attempt, _ = _admitted(db_session, phone="989-300-0007")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
     llm.force_timeout = True

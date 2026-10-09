@@ -26,6 +26,18 @@ os.environ.setdefault(
 )
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
 
+# CP14 test-environment defaults. The pre-CP14 suite dials at whatever wall-clock time it is
+# run, and a campaign with no retry_policy row is now judged by the DEFAULT policy, so the
+# production window (09:00-21:00 IST) and daily cap (1000) would make ~1100 unrelated tests
+# pass or fail depending on the hour. These make the environment "always open, effectively
+# uncapped"; every CP14 test that exercises the window or cap sets its own values explicitly
+# (see tests/test_cp14_*.py), so production defaults are still covered.
+os.environ.setdefault("HARD_CALLING_WINDOW_START", "00:00:00")
+os.environ.setdefault("HARD_CALLING_WINDOW_END", "23:59:59.999999")
+os.environ.setdefault("DEFAULT_CALLING_WINDOW_START", "00:00:00")
+os.environ.setdefault("DEFAULT_CALLING_WINDOW_END", "23:59:59.999999")
+os.environ.setdefault("DAILY_DIAL_CAP", "10000000")
+
 from app.core.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -112,3 +124,14 @@ def provider():
     from app.services.telephony.mock_provider import MockTelephonyProvider
 
     return MockTelephonyProvider()
+
+
+@pytest.fixture(autouse=True)
+def _reset_spend_cap_state():
+    """The budget check is cached in-process; never let one test's cached verdict (or its
+    audit/log throttle) leak into the next."""
+    from app.services import spend_cap
+
+    spend_cap.reset_state()
+    yield
+    spend_cap.reset_state()

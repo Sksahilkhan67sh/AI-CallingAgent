@@ -15,11 +15,11 @@ from app.models.conversation import CallEvent
 from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus, SuppressionSource
 from app.models.retry_policy import RetryPolicy
 from app.models.suppression import Suppression
-from app.services.phone import normalize_phone_number
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.recovery.dispatch import dispatch_due_recovery_jobs
 from app.services.recovery.job import RecoveryJob
 from app.services.recovery.scheduler import RecoveryScheduler
+from tests.phone_helpers import normalize_phone_number
 
 _engine = create_engine(os.environ["PRIMARY_DB_URL"])
 _Session = sessionmaker(bind=_engine)
@@ -76,7 +76,7 @@ def _cleanup(campaign_id, contact_id, *_extra):
 
 
 def test_due_job_is_enqueued_to_the_dialer(redis_client):
-    campaign_id, contact_id, attempt_id = _setup("555-991-0001", with_policy=False)
+    campaign_id, contact_id, attempt_id = _setup("989-991-0001", with_policy=False)
     try:
         scheduler = RecoveryScheduler(redis_client)
         queue = RedisStreamQueue(redis_client, "test:dispatch:calls", "test:dispatch:workers")
@@ -95,7 +95,7 @@ def test_due_job_is_enqueued_to_the_dialer(redis_client):
 
 
 def test_suppressed_contact_is_skipped_not_dispatched(redis_client):
-    campaign_id, contact_id, attempt_id = _setup("555-991-0002", with_policy=False)
+    campaign_id, contact_id, attempt_id = _setup("989-991-0002", with_policy=False)
     session = _Session()
     contact = session.get(Contact, contact_id)
     session.add(
@@ -125,7 +125,7 @@ def test_suppressed_contact_is_skipped_not_dispatched(redis_client):
 
 
 def test_paused_campaign_reschedules_instead_of_dropping(redis_client):
-    campaign_id, contact_id, attempt_id = _setup("555-991-0003")
+    campaign_id, contact_id, attempt_id = _setup("989-991-0003")
     session = _Session()
     campaign = session.get(Campaign, campaign_id)
     campaign.status = CampaignStatus.PAUSED
@@ -152,7 +152,7 @@ def test_paused_campaign_reschedules_instead_of_dropping(redis_client):
 
 def test_outside_calling_window_reschedules_to_window_open(redis_client):
     campaign_id, contact_id, attempt_id = _setup(
-        "555-991-0004", window=(dtime(9, 0), dtime(10, 0))
+        "989-991-0004", window=(dtime(9, 0), dtime(10, 0))
     )
     try:
         scheduler = RecoveryScheduler(redis_client)
@@ -174,7 +174,7 @@ def test_outside_calling_window_reschedules_to_window_open(redis_client):
 
 
 def test_two_workers_dispatching_the_same_due_job_only_enqueue_once(redis_client):
-    campaign_id, contact_id, attempt_id = _setup("555-991-0005", with_policy=False)
+    campaign_id, contact_id, attempt_id = _setup("989-991-0005", with_policy=False)
     try:
         scheduler = RecoveryScheduler(redis_client)
         queue = RedisStreamQueue(redis_client, "test:dispatch:calls5", "test:dispatch:workers5")

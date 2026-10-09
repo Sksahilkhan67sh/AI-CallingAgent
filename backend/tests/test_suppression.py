@@ -5,7 +5,7 @@ from app.models.contact import Contact
 from app.models.enums import SuppressionSource
 from app.models.suppression import Suppression
 from app.repositories.suppression_repository import SuppressionRepository
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
 def test_suppression_persists_and_is_queryable_by_phone_number(db_session):
@@ -15,8 +15,8 @@ def test_suppression_persists_and_is_queryable_by_phone_number(db_session):
 
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-666-7777",
-        normalized_phone_number=normalize_phone_number("555-666-7777"),
+        phone_number="989-666-7777",
+        normalized_phone_number=normalize_phone_number("989-666-7777"),
     )
     db_session.add(contact)
     db_session.flush()

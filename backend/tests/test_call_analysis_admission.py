@@ -10,10 +10,10 @@ from app.models.conversation import ConversationMessage, ConversationRole, Conve
 from app.models.enums import CallAttemptState, ContactStatus
 from app.services.analysis.admission import enqueue_call_analysis
 from app.services.analysis.factory import get_analysis_queue
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
-def _setup(db_session, *, phone="555-100-0001", attempt_state=CallAttemptState.ENDED_NORMALLY):
+def _setup(db_session, *, phone="989-100-0001", attempt_state=CallAttemptState.ENDED_NORMALLY):
     campaign = Campaign(name="CP06 admission test")
     db_session.add(campaign)
     db_session.flush()
@@ -56,7 +56,7 @@ def test_completed_call_is_queued_for_analysis(db_session, redis_client):
 
 def test_completed_partial_call_is_queued_for_analysis(db_session, redis_client):
     campaign, contact, attempt, session = _setup(
-        db_session, phone="555-100-0002", attempt_state=CallAttemptState.DROPPED_MID_CALL
+        db_session, phone="989-100-0002", attempt_state=CallAttemptState.DROPPED_MID_CALL
     )
     contact.status = ContactStatus.COMPLETED_PARTIAL
     db_session.flush()
@@ -70,7 +70,7 @@ def test_completed_partial_call_is_queued_for_analysis(db_session, redis_client)
 
 
 def test_non_terminal_call_is_not_queued(db_session, redis_client):
-    campaign, contact, attempt, session = _setup(db_session, phone="555-100-0003")
+    campaign, contact, attempt, session = _setup(db_session, phone="989-100-0003")
     contact.status = ContactStatus.IN_CONVERSATION
     db_session.flush()
 
@@ -89,7 +89,7 @@ def test_never_connected_call_is_not_queued_even_if_contact_status_is_terminal(
     must never be analyzed, regardless of what the Contact's own status
     ends up as."""
     campaign, contact, attempt, session = _setup(
-        db_session, phone="555-100-0004", attempt_state=CallAttemptState.FAILED_TO_CONNECT
+        db_session, phone="989-100-0004", attempt_state=CallAttemptState.FAILED_TO_CONNECT
     )
     # Even if some upstream bug left contact.status COMPLETED_PARTIAL for
     # a never-connected attempt, admission must still refuse it.
@@ -107,7 +107,7 @@ def test_never_connected_call_is_not_queued_even_if_contact_status_is_terminal(
 def test_closed_opted_out_call_is_not_queued(db_session, redis_client):
     """§26: Closed -> NO analysis, whether from never-connecting or from
     an opt-out during a connected call."""
-    campaign, contact, attempt, session = _setup(db_session, phone="555-100-0005")
+    campaign, contact, attempt, session = _setup(db_session, phone="989-100-0005")
     contact.status = ContactStatus.CLOSED
     db_session.flush()
 
@@ -120,7 +120,7 @@ def test_closed_opted_out_call_is_not_queued(db_session, redis_client):
 
 
 def test_duplicate_admission_does_not_create_a_second_analysis_row(db_session, redis_client):
-    campaign, contact, attempt, session = _setup(db_session, phone="555-100-0006")
+    campaign, contact, attempt, session = _setup(db_session, phone="989-100-0006")
 
     enqueue_call_analysis(db_session, attempt, contact)
     enqueue_call_analysis(db_session, attempt, contact)  # simulates a second terminal-state path
@@ -132,7 +132,7 @@ def test_duplicate_admission_does_not_create_a_second_analysis_row(db_session, r
 
 
 def test_duplicate_admission_does_not_enqueue_a_second_redis_job(db_session, redis_client):
-    campaign, contact, attempt, session = _setup(db_session, phone="555-100-0007")
+    campaign, contact, attempt, session = _setup(db_session, phone="989-100-0007")
     queue = get_analysis_queue()
 
     enqueue_call_analysis(db_session, attempt, contact)
@@ -146,7 +146,7 @@ def test_admission_emits_a_call_event_and_audit_entry(db_session, redis_client):
     from app.models.audit_log import AuditLog
     from app.models.conversation import CallEvent
 
-    campaign, contact, attempt, session = _setup(db_session, phone="555-100-0008")
+    campaign, contact, attempt, session = _setup(db_session, phone="989-100-0008")
 
     enqueue_call_analysis(db_session, attempt, contact)
 
@@ -176,8 +176,8 @@ def test_analysis_missing_conversation_session_is_still_admitted_with_null_sessi
     db_session.flush()
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-100-0009",
-        normalized_phone_number=normalize_phone_number("555-100-0009"),
+        phone_number="989-100-0009",
+        normalized_phone_number=normalize_phone_number("989-100-0009"),
         status=ContactStatus.COMPLETED,
     )
     db_session.add(contact)

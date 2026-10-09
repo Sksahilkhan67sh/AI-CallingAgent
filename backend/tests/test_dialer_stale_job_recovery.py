@@ -8,12 +8,12 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus
-from app.services.phone import normalize_phone_number
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.dialer_worker import JobOutcome, process_claimed_job
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.telephony.circuit_breaker import CircuitBreaker
+from tests.phone_helpers import normalize_phone_number
 
 
 def _admission(redis_client) -> AdmissionController:
@@ -37,7 +37,7 @@ def test_stale_job_left_unacked_is_reprocessed_after_reclaim(db_session, redis_c
     campaign = Campaign(name="stale job recovery test", status=CampaignStatus.ACTIVE)
     db_session.add(campaign)
     db_session.flush()
-    phone = "555-980-0001"
+    phone = "989-980-0001"
     contact = Contact(
         campaign_id=campaign.id,
         phone_number=phone,
@@ -86,7 +86,7 @@ def test_reclaimed_job_is_not_reprocessed_twice(db_session, redis_client, provid
     campaign = Campaign(name="stale job dedup test", status=CampaignStatus.PAUSED)
     db_session.add(campaign)
     db_session.flush()
-    phone = "555-980-0002"
+    phone = "989-980-0002"
     contact = Contact(
         campaign_id=campaign.id,
         phone_number=phone,

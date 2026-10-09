@@ -16,7 +16,7 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CallAttemptState
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 _engine = create_engine(os.environ["PRIMARY_DB_URL"])
 _Session = sessionmaker(bind=_engine)
@@ -29,8 +29,8 @@ def test_concurrent_duplicate_attempt_creation_only_one_succeeds():
     setup_session.flush()
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-909-0101",
-        normalized_phone_number=normalize_phone_number("555-909-0101"),
+        phone_number="989-909-0101",
+        normalized_phone_number=normalize_phone_number("989-909-0101"),
     )
     setup_session.add(contact)
     setup_session.commit()

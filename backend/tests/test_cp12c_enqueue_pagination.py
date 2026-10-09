@@ -90,8 +90,10 @@ def _bulk(campaign_id, count, *, start=0, status=ContactStatus.PENDING, attempt_
         {
             "id": ids[i] if ids else uuid.uuid4(),
             "campaign_id": campaign_id,
-            "phone_number": f"{block + start + i:010d}",
-            "normalized_phone_number": f"+{block + start + i:012d}",
+            # A valid Indian mobile (98 + 8 digits), unique per (block, start, i): the dial-time
+            # region re-check (CP14) refuses numbers that are not real E.164.
+            "phone_number": f"98{block + start + i:08d}",
+            "normalized_phone_number": f"+9198{block + start + i:08d}",
             "status": status,
             "attempt_count": attempt_count,
         }

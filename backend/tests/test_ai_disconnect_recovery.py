@@ -12,7 +12,10 @@ from tests.ai_helpers import build_orchestrator, create_connected_call
 
 
 def test_handle_disconnect_sets_dropped_mid_call_state(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-992-0001")
+    campaign, contact, attempt = create_connected_call(db_session, phone="989-992-0001")
+    # CP14: explicit zero-retry policy (a missing row now means the DEFAULT retries).
+    db_session.add(RetryPolicy(campaign_id=campaign.id, max_retries=0, retry_spacing_seconds=[]))
+    db_session.flush()
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -21,7 +24,7 @@ def test_handle_disconnect_sets_dropped_mid_call_state(db_session):
     assert attempt.state == CallAttemptState.DROPPED_MID_CALL
     assert attempt.disconnect_reason == MidCallDisconnectReason.TECHNICAL_ISSUE
     assert attempt.ended_at is not None
-    # No RetryPolicy is configured for this test's campaign, so
+    # The campaign's policy allows no retries, so
     # RecoveryManager (invoked synchronously at the end of
     # handle_disconnect) immediately terminalizes -- contact.status
     # passes through Disconnected but settles at CompletedPartial. See
@@ -35,7 +38,7 @@ def test_handle_disconnect_checkpoints_memory_before_recovery_decision(db_sessio
 
     from app.models.working_memory_snapshot import WorkingMemorySnapshot
 
-    _, contact, attempt = create_connected_call(db_session, phone="555-992-0002")
+    _, contact, attempt = create_connected_call(db_session, phone="989-992-0002")
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
     orchestrator.memory.captured_entities["interest_level"] = "interested"
@@ -54,7 +57,7 @@ def test_handle_disconnect_triggers_recovery_manager(db_session):
     """With a RetryPolicy configured and a retryable reason, disconnect
     handling schedules a retry -- contact ends up RetryScheduled, not
     just Disconnected."""
-    campaign, contact, attempt = create_connected_call(db_session, phone="555-992-0003")
+    campaign, contact, attempt = create_connected_call(db_session, phone="989-992-0003")
     db_session.add(RetryPolicy(campaign_id=campaign.id))
     db_session.flush()
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
@@ -66,7 +69,7 @@ def test_handle_disconnect_triggers_recovery_manager(db_session):
 
 
 def test_handle_disconnect_is_idempotent(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-992-0004")
+    _, contact, attempt = create_connected_call(db_session, phone="989-992-0004")
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -81,7 +84,7 @@ def test_handle_disconnect_is_idempotent(db_session):
 def test_reconnect_restores_previous_memory(db_session):
     """§17: a new CallAttempt (the retry) loads working memory that was
     checkpointed under the PREVIOUS attempt, not its own (empty) memory."""
-    campaign, contact, first_attempt = create_connected_call(db_session, phone="555-992-0005")
+    campaign, contact, first_attempt = create_connected_call(db_session, phone="989-992-0005")
     orchestrator, *_ = build_orchestrator(db_session, first_attempt, contact)
     orchestrator.start()
     orchestrator.handle_final_utterance("I'm interested but call me later")
@@ -114,7 +117,7 @@ def test_reconnect_preserves_previous_transcript(db_session):
 
     from app.models.conversation import ConversationMessage
 
-    _, contact, first_attempt = create_connected_call(db_session, phone="555-992-0006")
+    _, contact, first_attempt = create_connected_call(db_session, phone="989-992-0006")
     orchestrator, *_ = build_orchestrator(db_session, first_attempt, contact)
     orchestrator.start()
     orchestrator.handle_final_utterance("Hello")

@@ -33,3 +33,6 @@ class BulkContactImportResult(BaseModel):
     duplicates: int
     invalid: int
     errors: list[BulkImportRowError]
+    # CP14: valid rows whose number is already on the do-not-call list. They are still
+    # imported; the dial-time suppression check decides.
+    suppressed_count: int = 0

@@ -19,7 +19,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import get_settings
 
-_IMPORT_PATH = "/api/v1/campaigns/import"
+_IMPORT_PATHS = frozenset(
+    {"/api/v1/campaigns/import", "/api/v1/admin/suppressions/import"}
+)
 
 
 class _BodyTooLarge(Exception):
@@ -28,7 +30,7 @@ class _BodyTooLarge(Exception):
 
 def _limit_for(path: str) -> int:
     settings = get_settings()
-    if path.rstrip("/") == _IMPORT_PATH:
+    if path.rstrip("/") in _IMPORT_PATHS:
         return settings.max_import_body_bytes
     return settings.max_request_body_bytes
 

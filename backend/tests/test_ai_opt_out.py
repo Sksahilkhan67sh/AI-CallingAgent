@@ -13,7 +13,7 @@ def test_policy_engine_detects_opt_out_phrases_directly():
 
 
 def test_opt_out_utterance_ends_conversation_and_suppresses_contact(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0010")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0010")
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -29,7 +29,7 @@ def test_opt_out_writes_to_canonical_suppression_table(db_session):
 
     from app.models.suppression import Suppression
 
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0011")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0011")
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -43,7 +43,7 @@ def test_opt_out_writes_to_canonical_suppression_table(db_session):
 
 
 def test_opt_out_stops_further_ai_turns(db_session):
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0012")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0012")
     orchestrator, stt, llm, tts, audio = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 
@@ -59,7 +59,7 @@ def test_opt_out_does_not_schedule_a_retry(db_session):
     """No retry mechanism exists yet (Checkpoint 03 explicitly deferred
     it) -- this just asserts the CallAttempt/Contact are left in a
     terminal state, not queued for anything."""
-    _, contact, attempt = create_connected_call(db_session, phone="555-950-0013")
+    _, contact, attempt = create_connected_call(db_session, phone="989-950-0013")
     orchestrator, *_ = build_orchestrator(db_session, attempt, contact)
     orchestrator.start()
 

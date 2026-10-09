@@ -12,15 +12,15 @@ def _setup_connected_attempt(db_session):
     from app.models.campaign import Campaign
     from app.models.contact import Contact
     from app.models.enums import CallAttemptState, ContactStatus
-    from app.services.phone import normalize_phone_number
+    from tests.phone_helpers import normalize_phone_number
 
     campaign = Campaign(name="Webhook test campaign")
     db_session.add(campaign)
     db_session.flush()
     contact = Contact(
         campaign_id=campaign.id,
-        phone_number="555-600-0001",
-        normalized_phone_number=normalize_phone_number("555-600-0001"),
+        phone_number="989-600-0001",
+        normalized_phone_number=normalize_phone_number("989-600-0001"),
         status=ContactStatus.DIALING,
     )
     db_session.add(contact)

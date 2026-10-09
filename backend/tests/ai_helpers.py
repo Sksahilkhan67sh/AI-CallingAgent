@@ -12,10 +12,10 @@ from app.services.ai.llm.fake_llm import FakeLLM
 from app.services.ai.memory.store import MemoryStore
 from app.services.ai.stt.fake_stt import FakeSTT
 from app.services.ai.tts.fake_tts import FakeTTS
-from app.services.phone import normalize_phone_number
+from tests.phone_helpers import normalize_phone_number
 
 
-def create_connected_call(db_session, *, phone="555-950-0001", brand="Test Co"):
+def create_connected_call(db_session, *, phone="989-950-0001", brand="Test Co"):
     campaign = Campaign(name=brand, status=CampaignStatus.ACTIVE)
     db_session.add(campaign)
     db_session.flush()

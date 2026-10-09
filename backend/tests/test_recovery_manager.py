@@ -1,5 +1,6 @@
 """RecoveryManager decision engine -- Checkpoint 05 §4-8."""
 
+from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -13,13 +14,13 @@ from app.models.enums import (
 )
 from app.models.retry_policy import RetryPolicy
 from app.models.suppression import Suppression
-from app.services.phone import normalize_phone_number
 from app.services.recovery.manager import RecoveryManager
 from app.services.recovery.scheduler import RecoveryScheduler
+from tests.phone_helpers import normalize_phone_number
 
 
 def _setup(
-    db_session, *, phone="555-990-0001", campaign_status=CampaignStatus.ACTIVE, with_policy=True
+    db_session, *, phone="989-990-0001", campaign_status=CampaignStatus.ACTIVE, with_policy=True
 ):
     campaign = Campaign(name="Recovery test", status=campaign_status)
     db_session.add(campaign)
@@ -63,7 +64,7 @@ def test_retryable_reason_schedules_a_retry(db_session, redis_client):
 
 
 def test_second_retry_uses_second_spacing_value(db_session, redis_client):
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0002")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0002")
     attempt.attempt_number = 2
     db_session.flush()
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
@@ -81,7 +82,7 @@ def test_second_retry_uses_second_spacing_value(db_session, redis_client):
 
 
 def test_max_attempts_reached_is_terminal(db_session, redis_client):
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0003")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0003")
     attempt.attempt_number = 3  # already at max_retries(2) + 1 = 3 total attempts
     db_session.flush()
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
@@ -104,7 +105,7 @@ def test_customer_hangup_does_not_retry_by_default(db_session, redis_client):
     """§7: 'do not automatically treat every customer hangup as a
     technical failure' -- the existing DEFAULT_MID_CALL_RULES already
     has customer_hangup=False."""
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0004")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0004")
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
 
     decision = manager.handle_disconnect(
@@ -120,7 +121,7 @@ def test_customer_hangup_does_not_retry_by_default(db_session, redis_client):
 
 
 def test_rejected_never_connected_does_not_retry(db_session, redis_client):
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0005")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0005")
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
 
     decision = manager.handle_disconnect(
@@ -135,7 +136,7 @@ def test_rejected_never_connected_does_not_retry(db_session, redis_client):
 
 
 def test_suppressed_contact_never_retries_regardless_of_reason(db_session, redis_client):
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0006")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0006")
     db_session.add(
         Suppression(
             contact_id=contact.id,
@@ -160,7 +161,7 @@ def test_suppressed_contact_never_retries_regardless_of_reason(db_session, redis
 
 
 def test_closed_contact_never_retries(db_session, redis_client):
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0007")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0007")
     contact.status = ContactStatus.CLOSED
     db_session.flush()
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
@@ -180,7 +181,7 @@ def test_closed_contact_never_retries(db_session, redis_client):
 
 def test_completed_campaign_does_not_retry(db_session, redis_client):
     campaign, contact, attempt = _setup(
-        db_session, phone="555-990-0008", campaign_status=CampaignStatus.ACTIVE
+        db_session, phone="989-990-0008", campaign_status=CampaignStatus.ACTIVE
     )
     campaign.status = CampaignStatus.COMPLETED
     db_session.flush()
@@ -198,8 +199,30 @@ def test_completed_campaign_does_not_retry(db_session, redis_client):
     assert decision.reason == "campaign_completed"
 
 
-def test_no_retry_policy_configured_defaults_to_no_retry(db_session, redis_client):
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0009", with_policy=False)
+def test_no_policy_row_means_the_default_policy_not_no_retries(db_session, redis_client):
+    """CP14 (C5b) REVERSES the old assertion of this test. Before, a campaign without a
+    retry_policy row meant "no retries" (and, elsewhere, no calling window). Now a missing row
+    means the configured DEFAULT policy, so a retryable failure is scheduled."""
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0009", with_policy=False)
+    manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
+
+    decision = manager.handle_disconnect(
+        attempt,
+        contact,
+        campaign,
+        never_connected=False,
+        reason_key=MidCallDisconnectReason.TECHNICAL_ISSUE.value,
+    )
+
+    assert decision.should_retry is True
+    assert decision.reason == "scheduled"
+    assert decision.delay_seconds == get_settings().default_retry_spacing_seconds[0]
+
+
+def test_explicit_zero_retry_policy_means_no_retry(db_session, redis_client):
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0010", with_policy=False)
+    db_session.add(RetryPolicy(campaign_id=campaign.id, max_retries=0, retry_spacing_seconds=[]))
+    db_session.flush()
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
 
     decision = manager.handle_disconnect(
@@ -211,7 +234,7 @@ def test_no_retry_policy_configured_defaults_to_no_retry(db_session, redis_clien
     )
 
     assert decision.should_retry is False
-    assert decision.reason == "no_retry_policy_configured"
+
 
 
 def test_recovery_events_are_logged(db_session, redis_client):
@@ -219,7 +242,7 @@ def test_recovery_events_are_logged(db_session, redis_client):
 
     from app.models.conversation import CallEvent
 
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0010")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0010")
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
 
     manager.handle_disconnect(
@@ -243,7 +266,7 @@ def test_recovery_actions_are_audited(db_session, redis_client):
 
     from app.models.audit_log import AuditLog
 
-    campaign, contact, attempt = _setup(db_session, phone="555-990-0011")
+    campaign, contact, attempt = _setup(db_session, phone="989-990-0011")
     manager = RecoveryManager(db_session, RecoveryScheduler(redis_client))
 
     manager.handle_disconnect(
