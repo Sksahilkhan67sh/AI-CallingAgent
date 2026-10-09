@@ -41,7 +41,7 @@ GOOD_BODY = {
 }
 
 
-# -- born with the campaign -----------------------------------------------------------------------------
+# -- born with the campaign -----------------------------------------------------------------------
 
 
 def test_creating_a_campaign_creates_its_policy_with_the_configured_defaults(
@@ -75,7 +75,7 @@ def test_the_default_backoffs_are_production_safe_not_development_values():
     assert s.default_retry_spacing_seconds != [30, 600]  # the old dev values
 
 
-# -- timezone / region validation on campaigns ---------------------------------------------------------------
+# -- timezone / region validation on campaigns ----------------------------------------------------
 
 
 @pytest.mark.parametrize("tz", ["Mars/Base", "IST", "", "../etc/passwd", "x" * 90])
@@ -105,7 +105,7 @@ def test_campaign_timezone_is_editable_but_region_is_not(client):
     assert ignored.json()["default_region"] == "IN"  # existing contacts were parsed with it
 
 
-# -- legacy campaigns -----------------------------------------------------------------------------------------
+# -- legacy campaigns -----------------------------------------------------------------------------
 
 
 def test_a_legacy_campaign_without_a_row_gets_the_default_policy(db_session, production_window):
@@ -163,7 +163,7 @@ def test_the_backfill_script_creates_only_missing_rows(db_session):
     assert policy.max_retries == 1  # an existing row is never touched
 
 
-# -- the admin API --------------------------------------------------------------------------------------------------
+# -- the admin API --------------------------------------------------------------------------------
 
 
 def _url(campaign_id) -> str:
@@ -264,6 +264,42 @@ def test_put_unknown_campaign_is_404(client):
 
 def test_put_draws_from_the_mutation_budget(client, monkeypatch):
     campaign = _new_campaign(client)
-    monkeypatch.setattr(get_settings(), "mutation_rate_limit_per_minute", 3)  # +1: creating the campaign above
+    monkeypatch.setattr(
+        get_settings(), "mutation_rate_limit_per_minute", 3
+    )  # +1: creating the campaign above
     codes = [client.put(_url(campaign["id"]), json=GOOD_BODY).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
+
+
+# -- .env.example ---------------------------------------------------------------------------------
+
+
+def test_env_example_documents_every_cp14_setting_and_loads_as_valid_settings(monkeypatch):
+    import pathlib
+
+    from app.core.config import Settings
+
+    text = (pathlib.Path(__file__).resolve().parents[2] / ".env.example").read_text()
+    new_settings = [
+        "default_region", "default_timezone", "allowed_dial_regions",
+        "hard_calling_window_start", "hard_calling_window_end",
+        "default_calling_window_start", "default_calling_window_end",
+        "default_max_retries", "default_retry_spacing_seconds", "max_retries_ceiling",
+        "min_retry_backoff_seconds", "max_retry_backoff_seconds", "daily_dial_cap",
+        "daily_estimated_spend_cap", "estimated_cost_per_minute",
+        "estimated_minutes_per_unknown_attempt", "budget_timezone",
+        "budget_check_cache_ttl_seconds",
+    ]  # fmt: skip
+    for name in new_settings:
+        assert name.upper() in text, f"{name.upper()} is not documented in .env.example"
+
+    prefixes = ("DEFAULT_", "ALLOWED_", "HARD_", "MAX_RETRIES", "MIN_RETRY", "MAX_RETRY")
+    prefixes += ("DAILY_", "ESTIMATED_", "BUDGET_")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            if key.startswith(prefixes) and not key.startswith(("DEFAULT_DB", "DEFAULT_LLM")):
+                monkeypatch.setenv(key, value)
+    s = Settings()
+    assert s.allowed_dial_regions == ["IN"] and s.daily_dial_cap == 1000

@@ -213,7 +213,7 @@ def test_association_revalidates_a_legacy_contact(client, db_session):
     assert contact.campaign_id == source.id  # nothing moved
 
 
-# -- CSV import -------------------------------------------------------------------------------------
+# -- CSV import -----------------------------------------------------------------------------------
 
 
 def _upload(client, csv_text: str, name="cp14 import"):

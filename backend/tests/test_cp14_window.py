@@ -148,7 +148,7 @@ def test_timezone_loading_never_falls_back_to_an_offset():
             load_timezone(bad)  # type: ignore[arg-type]
 
 
-# -- no call path may compare against UTC -----------------------------------------------------------
+# -- no call path may compare against UTC ---------------------------------------------------------
 
 _APP = pathlib.Path(__file__).resolve().parent.parent / "app"
 
@@ -213,7 +213,7 @@ def test_region_is_rechecked_at_dial_time_for_legacy_rows(production_window):
     assert not result.transient  # permanent: this is not a "try again later"
 
 
-# -- the dialer: deferred, never lost -------------------------------------------------------------------
+# -- the dialer: deferred, never lost -------------------------------------------------------------
 
 
 def test_first_attempt_outside_the_window_is_deferred_not_lost(rig):

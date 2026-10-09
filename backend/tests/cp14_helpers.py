@@ -44,8 +44,10 @@ def next_phone() -> str:
 
 
 def ist(hour: int, minute: int = 0, day: int = 6) -> datetime:
-    """A wall-clock instant in Asia/Kolkata on 2026-01-<day>, as aware UTC."""
-    return datetime(2026, 1, day, hour, minute, tzinfo=IST).astimezone(UTC)
+    """A wall-clock instant in Asia/Kolkata on day `day` of 2026 (day 1 = 2026-01-01; any
+    positive offset works, so tests can each own a day), as aware UTC."""
+    base = datetime(2026, 1, 1, tzinfo=IST) + timedelta(days=day - 1)
+    return base.replace(hour=hour, minute=minute).astimezone(UTC)
 
 
 class Clock:
@@ -176,5 +178,3 @@ def enqueue_first(rig, campaign_id, contact_id) -> DialJob:
     rig.redis.set(enqueue_guard_key(job.idempotency_key), "1", ex=3600)
     rig.queue.enqueue(job)
     return job
-
-

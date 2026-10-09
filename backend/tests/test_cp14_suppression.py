@@ -56,14 +56,18 @@ def _csv(client, body: str, **kw):
     )
 
 
-# -- add one --------------------------------------------------------------------------------------------
+# -- add one --------------------------------------------------------------------------------------
 
 
 def test_a_number_without_a_contact_can_be_stored(client, db_session):
     response = client.post(URL, json={"phone_number": NUMBER, "reason": "registry export"})
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["created"] is True and body["contact_id"] is None and body["created_by"] == "test-admin"
+    assert (
+        body["created"] is True
+        and body["contact_id"] is None
+        and body["created_by"] == "test-admin"
+    )
     assert body["source"] == "manual_api" and body["last4"] == "0001"
     assert NUMBER not in response.text and "9811100001" not in response.text  # masked only
     row = db_session.execute(select(Suppression)).scalar_one()
@@ -90,9 +94,7 @@ def test_add_with_a_matching_contact_links_it(client, db_session):
     contact = client.post(
         "/api/v1/contacts", json={"campaign_id": campaign["id"], "phone_number": "9811100003"}
     ).json()
-    response = client.post(
-        URL, json={"phone_number": "9811100003", "contact_id": contact["id"]}
-    )
+    response = client.post(URL, json={"phone_number": "9811100003", "contact_id": contact["id"]})
     assert response.status_code == 201 and response.json()["contact_id"] == contact["id"]
     again = client.post(URL, json={"phone_number": "9811100003", "contact_id": contact["id"]})
     assert again.status_code == 200 and again.json()["id"] == response.json()["id"]
@@ -105,9 +107,7 @@ def test_add_rejects_a_contact_that_does_not_own_the_number(client):
     ).json()
     mismatch = client.post(URL, json={"phone_number": "9811100005", "contact_id": contact["id"]})
     assert mismatch.status_code == 422
-    unknown = client.post(
-        URL, json={"phone_number": "9811100005", "contact_id": str(uuid.uuid4())}
-    )
+    unknown = client.post(URL, json={"phone_number": "9811100005", "contact_id": str(uuid.uuid4())})
     assert unknown.status_code == 404
 
 
@@ -120,7 +120,9 @@ def test_a_contact_that_already_has_a_row_under_another_number_still_records_the
     ).json()
     db_session.add(
         Suppression(
-            contact_id=contact["id"], phone_number="+919811100099", source=SuppressionSource.MANUAL_API
+            contact_id=contact["id"],
+            phone_number="+919811100099",
+            source=SuppressionSource.MANUAL_API,
         )
     )
     db_session.commit()
@@ -145,7 +147,7 @@ def test_add_rejects_invalid_numbers_with_a_reason_code(client, raw, code):
     assert code in response.text or response.json()["detail"]  # schema-level for blank
 
 
-# -- audit and logs never hold a full number ------------------------------------------------------------------
+# -- audit and logs never hold a full number ------------------------------------------------------
 
 
 def test_audit_metadata_has_a_fingerprint_and_last4_but_never_the_number(client, db_session):
@@ -181,7 +183,7 @@ def test_application_logs_never_contain_a_full_number(client, db_session, caplog
         assert digits not in text
 
 
-# -- bulk import --------------------------------------------------------------------------------------------------
+# -- bulk import ----------------------------------------------------------------------------------
 
 
 def test_bulk_import_counts_and_per_row_errors(client, db_session):
@@ -250,7 +252,7 @@ def test_bulk_import_draws_from_the_import_budget(client, monkeypatch):
     assert _csv(client, "phone_number\n9811100015\n").status_code == 429
 
 
-# -- list / search / remove -----------------------------------------------------------------------------------------
+# -- list / search / remove -----------------------------------------------------------------------
 
 
 def test_list_is_bounded_paginated_and_searchable_by_any_spelling(client):
@@ -278,7 +280,9 @@ def test_remove_needs_a_reason_and_re_enables_calling(client, db_session):
     ok = client.request("DELETE", f"{URL}/{row['id']}", json={"reason": "wrongly listed"})
     assert ok.status_code == 204
     assert not SuppressionRepository(db_session).is_suppressed("+919811100016")
-    assert client.request("DELETE", f"{URL}/{row['id']}", json={"reason": "again"}).status_code == 404
+    assert (
+        client.request("DELETE", f"{URL}/{row['id']}", json={"reason": "again"}).status_code == 404
+    )
     assert client.post(URL, json={"phone_number": "9811100016"}).status_code == 201  # re-addable
 
 
@@ -287,7 +291,9 @@ def test_authz_operators_read_only_anon_nothing(client, operator_client, anon_cl
     assert operator_client.get(URL).status_code == 200
     assert operator_client.post(URL, json={"phone_number": "9811100018"}).status_code == 403
     assert (
-        operator_client.request("DELETE", f"{URL}/{row['id']}", json={"reason": "operator try"}).status_code
+        operator_client.request(
+            "DELETE", f"{URL}/{row['id']}", json={"reason": "operator try"}
+        ).status_code
         == 403
     )
     assert _csv(operator_client, "phone_number\n9811100019\n").status_code == 403
@@ -298,16 +304,21 @@ def test_authz_operators_read_only_anon_nothing(client, operator_client, anon_cl
 
 def test_mutations_draw_from_the_mutation_budget(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "mutation_rate_limit_per_minute", 2)
-    codes = [client.post(URL, json={"phone_number": f"98111000{i:02d}"}).status_code for i in (21, 22, 23)]
+    codes = [
+        client.post(URL, json={"phone_number": f"98111000{i:02d}"}).status_code
+        for i in (21, 22, 23)
+    ]
     assert codes == [201, 201, 429]
 
 
-# -- dial time: authoritative, permanent --------------------------------------------------------------------------------------
+# -- dial time: authoritative, permanent ----------------------------------------------------------
 
 
 def test_a_number_added_after_its_job_was_queued_is_not_dialed(rig):
     rig.clock.now = ist(12, 0)  # window open: only the suppression can stop this call
-    campaign, (contact,) = commit_world(policy={"max_retries": 2, "retry_spacing_seconds": [900, 900]})
+    campaign, (contact,) = commit_world(
+        policy={"max_retries": 2, "retry_spacing_seconds": [900, 900]}
+    )
     enqueue_first(rig, campaign, contact)
     with Session() as s:
         number = s.get(Contact, contact).normalized_phone_number
@@ -347,7 +358,7 @@ def test_enqueue_skips_suppressed_numbers_with_the_same_lookup(client, db_sessio
     assert repo.suppressed_among({"+919811100030", "+919811100031"}) == {"+919811100030"}
 
 
-# -- opt-out writers ---------------------------------------------------------------------------------------------------------------
+# -- opt-out writers ------------------------------------------------------------------------------
 
 
 def test_opt_out_writer_is_global_idempotent_and_audits_only_the_inserter(db_session):
@@ -382,9 +393,11 @@ def test_opt_out_writer_is_global_idempotent_and_audits_only_the_inserter(db_ses
         _suppress_for_opt_out(db_session, attempt, contact, payload)
     _suppress_for_opt_out(db_session, attempts[0], contacts[0], payload)  # a repeat
 
-    rows = db_session.execute(
-        select(Suppression).where(Suppression.phone_number == "+919811100040")
-    ).scalars().all()
+    rows = (
+        db_session.execute(select(Suppression).where(Suppression.phone_number == "+919811100040"))
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1 and rows[0].source == SuppressionSource.AGENT_IN_CALL
     assert rows[0].contact_id == contacts[0].id  # the first writer's contact; the number is global
     assert all(c.status == ContactStatus.CLOSED for c in contacts)  # both contacts are closed
@@ -413,9 +426,7 @@ def test_opt_out_is_a_no_op_when_an_operator_already_listed_the_number(db_sessio
     )
     db_session.add(contact)
     db_session.flush()
-    attempt = CallAttempt(
-            contact_id=contact.id, attempt_number=1, state=CallAttemptState.CONNECTED
-        )
+    attempt = CallAttempt(contact_id=contact.id, attempt_number=1, state=CallAttemptState.CONNECTED)
     db_session.add(attempt)
     db_session.add(Suppression(phone_number="+919811100041", source=SuppressionSource.MANUAL_API))
     db_session.flush()
@@ -424,7 +435,9 @@ def test_opt_out_is_a_no_op_when_an_operator_already_listed_the_number(db_sessio
     _suppress_for_opt_out(db_session, attempt, contact, payload)  # must not raise
 
     assert contact.status == ContactStatus.CLOSED
-    mine = select(func.count()).select_from(Suppression).where(
-        Suppression.phone_number == "+919811100041"
+    mine = (
+        select(func.count())
+        .select_from(Suppression)
+        .where(Suppression.phone_number == "+919811100041")
     )
     assert db_session.execute(mine).scalar_one() == 1
