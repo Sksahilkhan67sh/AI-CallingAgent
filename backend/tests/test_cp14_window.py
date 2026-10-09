@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """CP14 (C5a) -- calling windows are read in the campaign's timezone, clamped by a hard bound,
 and a job outside its window is deferred, never lost."""
 
@@ -8,9 +9,7 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
 
-from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus
@@ -25,26 +24,23 @@ from app.services.calling_window import (
     window_within_bound,
 )
 from app.services.eligibility_service import DialEligibilityService
-from app.services.queue import dialer_worker
-from app.services.queue.dialer_worker import JobOutcome, process_one_job
+from app.services.queue.dialer_worker import JobOutcome
 from app.services.queue.enqueue_service import enqueue_guard_key
 from app.services.queue.job import DialJob
 from app.services.recovery.dispatch import dispatch_due_recovery_jobs
-from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.job import RecoveryJob
-from app.services.recovery.scheduler import _SCHEDULE_KEY
-from app.services.telephony.circuit_breaker import CircuitBreaker
 from tests.cp14_helpers import (
     IST,
-    Clock,
     Session,
     commit_world,
     ist,
-    make_admission,
-    make_queue,
     production_window,  # noqa: F401  (fixture)
+    rig,  # noqa: F401  (fixture)
     truncate_after_module,  # noqa: F401  (fixture)
 )
+from tests.cp14_helpers import attempts_of as _attempts
+from tests.cp14_helpers import contact_state as _contact
+from tests.cp14_helpers import enqueue_first as _enqueue_first
 
 NY = ZoneInfo("America/New_York")
 H9, H21 = time(9), time(21)
@@ -218,57 +214,6 @@ def test_region_is_rechecked_at_dial_time_for_legacy_rows(production_window):
 
 
 # -- the dialer: deferred, never lost -------------------------------------------------------------------
-
-
-@pytest.fixture
-def rig(redis_client, provider, monkeypatch, production_window):
-    clock = Clock(ist(3, 0))  # 03:00 IST: closed
-    monkeypatch.setattr(dialer_worker, "_utcnow", clock)
-
-    class Rig:
-        pass
-
-    r = Rig()
-    r.clock, r.redis, r.provider = clock, redis_client, provider
-    r.queue, r.admission = make_queue(redis_client), make_admission(redis_client)
-    r.scheduler = get_recovery_scheduler()
-
-    def run_one() -> str:
-        with Session() as s:
-            outcome = process_one_job(
-                s,
-                r.queue,
-                r.admission,
-                r.provider,
-                CircuitBreaker(redis_client, provider.name),
-                consumer_name="w1",
-                block_ms=20,
-            )
-            s.commit()
-        return outcome
-
-    r.run_one = run_one
-    r.pending = lambda: redis_client.xpending(r.queue.stream_key, r.queue.group)["pending"]
-    r.scheduled = lambda: redis_client.zrange(_SCHEDULE_KEY, 0, -1, withscores=True)
-    return r
-
-
-def _attempts(contact_id):
-    with Session() as s:
-        return s.execute(select(CallAttempt).where(CallAttempt.contact_id == contact_id)).all()
-
-
-def _contact(contact_id):
-    with Session() as s:
-        c = s.get(Contact, contact_id)
-        return c.status, c.attempt_count
-
-
-def _enqueue_first(rig, campaign_id, contact_id) -> DialJob:
-    job = DialJob.new(campaign_id=campaign_id, contact_id=contact_id, attempt_number=1)
-    rig.redis.set(enqueue_guard_key(job.idempotency_key), "1", ex=3600)
-    rig.queue.enqueue(job)
-    return job
 
 
 def test_first_attempt_outside_the_window_is_deferred_not_lost(rig):

@@ -11,17 +11,25 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.models.base import Base
+from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.enums import CampaignStatus, ContactStatus
 from app.models.retry_policy import RetryPolicy
+from app.services.queue import dialer_worker
 from app.services.queue.admission_controller import AdmissionController
+from app.services.queue.dialer_worker import process_one_job
+from app.services.queue.enqueue_service import enqueue_guard_key
+from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import RedisStreamQueue
+from app.services.recovery.factory import get_recovery_scheduler
+from app.services.recovery.scheduler import _SCHEDULE_KEY
+from app.services.telephony.circuit_breaker import CircuitBreaker
 from tests.phone_helpers import valid_in
 
 engine = create_engine(os.environ["PRIMARY_DB_URL"])
@@ -117,3 +125,56 @@ def make_admission(redis_client) -> AdmissionController:
         campaign_concurrency_limit=10_000,
         provider_concurrency_limit=10_000,
     )
+
+
+@pytest.fixture
+def rig(redis_client, provider, monkeypatch, production_window):
+    clock = Clock(ist(3, 0))  # 03:00 IST: closed
+    monkeypatch.setattr(dialer_worker, "_utcnow", clock)
+
+    class Rig:
+        pass
+
+    r = Rig()
+    r.clock, r.redis, r.provider = clock, redis_client, provider
+    r.queue, r.admission = make_queue(redis_client), make_admission(redis_client)
+    r.scheduler = get_recovery_scheduler()
+
+    def run_one() -> str:
+        with Session() as s:
+            outcome = process_one_job(
+                s,
+                r.queue,
+                r.admission,
+                r.provider,
+                CircuitBreaker(redis_client, provider.name),
+                consumer_name="w1",
+                block_ms=20,
+            )
+            s.commit()
+        return outcome
+
+    r.run_one = run_one
+    r.pending = lambda: redis_client.xpending(r.queue.stream_key, r.queue.group)["pending"]
+    r.scheduled = lambda: redis_client.zrange(_SCHEDULE_KEY, 0, -1, withscores=True)
+    return r
+
+
+def attempts_of(contact_id):
+    with Session() as s:
+        return s.execute(select(CallAttempt).where(CallAttempt.contact_id == contact_id)).all()
+
+
+def contact_state(contact_id):
+    with Session() as s:
+        c = s.get(Contact, contact_id)
+        return c.status, c.attempt_count
+
+
+def enqueue_first(rig, campaign_id, contact_id) -> DialJob:
+    job = DialJob.new(campaign_id=campaign_id, contact_id=contact_id, attempt_number=1)
+    rig.redis.set(enqueue_guard_key(job.idempotency_key), "1", ex=3600)
+    rig.queue.enqueue(job)
+    return job
+
+
