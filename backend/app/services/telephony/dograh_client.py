@@ -267,6 +267,44 @@ class DograhClient:
         )
         return _parse_trigger_response(response)
 
+    def get_run(
+        self, *, workflow_id: int, run_id: int, max_bytes: int = 1_000_000
+    ) -> dict[str, Any]:
+        """CP14B: GET /api/v1/workflow/{workflow_id}/runs/{run_id} -- Dograh's documented
+        "Retrieve Agent Run Details" (https://docs.dograh.com/api-reference/runs/get-run).
+        Returns the parsed JSON object (is_completed, annotations, gathered_context,
+        cost_info, usage_info, ...). A read-only call: it never triggers analysis.
+
+        Raises DograhApiError for HTTP/transport failures (shared taxonomy, 429 carries a
+        bounded Retry-After) and for a body that is oversized, not JSON, or not an object.
+        Verified against Dograh's published OpenAPI only -- NOT against a live instance."""
+        response = self._send(
+            httpx.get,
+            f"{self.base_url}/api/v1/workflow/{int(workflow_id)}/runs/{int(run_id)}",
+            headers={"X-API-Key": self.api_key},
+        )
+        if len(response.content) > max_bytes:
+            raise DograhApiError(
+                response.status_code,
+                "run response exceeds the size limit",
+                category=DograhErrorCategory.UNKNOWN_PROVIDER_ERROR,
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise DograhApiError(
+                response.status_code,
+                "run response is not JSON",
+                category=DograhErrorCategory.UNKNOWN_PROVIDER_ERROR,
+            ) from exc
+        if not isinstance(body, dict):
+            raise DograhApiError(
+                response.status_code,
+                "run response is not a JSON object",
+                category=DograhErrorCategory.UNKNOWN_PROVIDER_ERROR,
+            )
+        return body
+
     def find_runs_for_attempt(self, call_attempt_id: str, since: datetime) -> list[int]:
         """Reconciliation for an ambiguous trigger: which Dograh runs, if any,
         were created for this CallAttempt?

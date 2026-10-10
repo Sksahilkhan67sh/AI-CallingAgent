@@ -33,6 +33,16 @@ class DograhWebhookPayload(BaseModel):
     contact_id: str | None = Field(default=None, max_length=64)
     campaign_id: str | None = Field(default=None, max_length=64)
     workflow_run_id: int | str | None = None
+    # CP14B: the Dograh workflow (agent) id, needed to GET the run's QA annotations. Optional so
+    # templates that predate it keep validating; DOGRAH_WORKFLOW_ID is the fallback.
+    workflow_id: int | str | None = None
+
+    @field_validator("workflow_id", mode="before")
+    @classmethod
+    def _workflow_id_is_not_a_boolean(cls, value: object) -> object:
+        # pydantic would coerce JSON `true` to 1; a boolean is never a valid workflow id.
+        return None if isinstance(value, bool) else value
+
     call_status: str | None = Field(default=None, max_length=_MAX_STATUS_LEN)
     call_disposition: str | None = Field(default=None, max_length=_MAX_STATUS_LEN)
     mapped_call_disposition: str | None = Field(default=None, max_length=_MAX_STATUS_LEN)

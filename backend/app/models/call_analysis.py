@@ -14,9 +14,22 @@ duplicated here.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -45,6 +58,15 @@ class CallAnalysis(Base):
         Index("ix_call_analysis_campaign_id", "campaign_id"),
         Index("ix_call_analysis_status", "status"),
         Index("ix_call_analysis_created_at", "created_at"),
+        # CP14B sweeper discovery (bounded, indexed -- never a table scan).
+        Index("ix_call_analysis_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_call_analysis_status_lease", "status", "lease_expires_at"),
+        # A PROCESSING row always has an owner (fencing token) and a lease.
+        CheckConstraint(
+            "status <> 'processing' OR (claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_call_analysis_processing_has_lease",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_call_analysis_attempt_count_nonneg"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -101,6 +123,33 @@ class CallAnalysis(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # -- CP14B: lease + fencing, retry scheduling, publication tracking ---
+    # claim_token is the FENCING token: a fresh uuid per claim. Every
+    # result/retry write is `WHERE claim_token = :mine AND status =
+    # 'processing'`, so a worker whose lease expired (and whose row was
+    # re-claimed) can never overwrite a newer worker's outcome.
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # When the job was last (to be) published to Redis. Redis is a fast
+    # path only: the sweeper republishes a still-unfinished row whose
+    # publication is older than analysis_republish_after_seconds.
+    last_enqueued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # -- CP14B daily estimated-spend accounting (separate from CP14's dialing cap)
+    budget_day: Mapped[date | None] = mapped_column(Date, nullable=True)
+    reserved_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    # Run-level charge as REPORTED by Dograh. NOT attributed to QA: whether
+    # it includes post-call QA tokens is UNVERIFIED (see CHECKPOINT-14B-NOTES).
+    observed_run_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+
     # -- lifecycle timestamps (§5, §24) -------------------------------
     processing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -113,6 +162,23 @@ class CallAnalysis(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AnalysisBudgetDay(Base):
+    """CP14B: durable per-day ledger of ESTIMATED post-call-analysis spend.
+
+    One row per budget day. `reserved_cost` only moves through the atomic
+    conditional upsert in app.services.analysis.budget, so concurrent
+    workers cannot overspend through a race. All figures are estimates,
+    never billing."""
+
+    __tablename__ = "analysis_budget_day"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    reserved_cost: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

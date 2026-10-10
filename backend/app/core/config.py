@@ -26,6 +26,7 @@ _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
 _CALLING_ENGINES = frozenset({"native", "dograh"})
 _MAX_ENQUEUE_PAGE_SIZE = 5_000
 _DOGRAH_TRIGGER_MODES = frozenset({"test", "production"})
+_ANALYSIS_PROVIDERS = frozenset({"mock", "dograh_qa"})
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 # CP11 production secret policy. Lengths are deliberately modest floors, not a
 # strength meter: a 32-char token / 12-char password a human cannot guess, and a
@@ -223,6 +224,52 @@ class Settings(BaseSettings):
     # the middle -- see app/services/analysis/transcript.py.
     analysis_max_transcript_messages: int = 200
 
+    # --- CP14B: post-call intelligence reliability + Dograh QA adapter ---
+    # Provider: "mock" (CP06 fake) or "dograh_qa" (reads the QA node's annotations
+    # from Dograh's GET run endpoint; it makes NO LLM request of its own).
+    # Lease/fencing: a claimed analysis is owned for this long; an expired lease is
+    # recoverable by any worker. Must exceed the longest Dograh fetch (validated below).
+    analysis_lease_seconds: int = 120
+    # Retry policy -- the WORKER is the only retry owner (no nested retry loops).
+    # delay = min(max, base * 2**(attempt-1)) * uniform(0.5, 1.0); Retry-After wins if larger.
+    analysis_retry_base_seconds: int = 30
+    analysis_retry_max_seconds: int = 900
+    # "QA result not ready" is polled (without consuming attempts) until this deadline,
+    # measured from the analysis row's creation; then the analysis is SKIPPED as
+    # "QA never produced a result".
+    analysis_qa_ready_deadline_seconds: int = 1800
+    analysis_initial_delay_seconds: int = 0
+    # Sweeper (runs inside each analysis worker; idempotent and safe to run concurrently).
+    analysis_sweeper_interval_seconds: int = 15
+    analysis_sweeper_batch_size: int = 100
+    # A PENDING/RETRY_WAIT row whose publication is older than this is republished
+    # (recovers jobs lost to a Redis restart or a failed post-commit publish).
+    analysis_republish_after_seconds: int = 300
+    # Registers completed calls that have no analysis row, but only this recent -- a
+    # bounded safety net, deliberately NOT a historical backfill.
+    analysis_sweeper_lookback_hours: int = 72
+    # Mirrors the QA node's "Minimum Call Duration" in Dograh (default 15s). Calls shorter
+    # than this are SKIPPED without a fetch. MUST match the Dograh node's setting.
+    dograh_qa_min_duration_seconds: float = 15.0
+    # Optional: the exact key under run.annotations where the QA node's JSON lands. Its
+    # naming is UNDOCUMENTED; when empty the adapter finds the single entry that carries our
+    # contract marker (schema_version == "cp14b.v1") and refuses ambiguity.
+    dograh_qa_annotation_key: str = ""
+    # Fallback for webhooks whose payload_template predates `workflow_id`.
+    dograh_workflow_id: int | None = None
+    # Input bounds (the transcript is validated/measured here even though Dograh, not this
+    # backend, sends it to its QA LLM) and the maximum accepted annotation size.
+    analysis_max_message_chars: int = 2_000
+    analysis_max_transcript_chars: int = 60_000
+    analysis_max_output_bytes: int = 16_384
+    # Daily ESTIMATED spend for post-call analysis -- a control SEPARATE from CP14's dialing
+    # cap. Both must be set together; when unset (or the provider is not "mock") new analysis
+    # work FAILS CLOSED: it stays pending with reason budget_not_configured. All figures are
+    # estimates, never billing. Counted against the BUDGET_TIMEZONE day.
+    analysis_daily_estimated_spend_cap: float | None = None
+    analysis_estimated_cost_per_analysis: float | None = None
+    analysis_budget_recheck_seconds: int = 600
+
     # --- Compliance basics + daily spend cap (Checkpoint 14) ---
     # Single-tenant: one default region / timezone for the whole system; a campaign may
     # override both at creation. Numbers written without a country code are read in the
@@ -321,6 +368,52 @@ class Settings(BaseSettings):
             problems.append("ESTIMATED_MINUTES_PER_UNKNOWN_ATTEMPT must be >= 0")
         if self.budget_check_cache_ttl_seconds < 0:
             problems.append("BUDGET_CHECK_CACHE_TTL_SECONDS must be >= 0")
+
+        # --- CP14B analysis settings ---
+        if self.analysis_llm_provider not in _ANALYSIS_PROVIDERS:
+            problems.append(f"ANALYSIS_LLM_PROVIDER must be one of {sorted(_ANALYSIS_PROVIDERS)}")
+        for name in (
+            "analysis_lease_seconds",
+            "analysis_retry_base_seconds",
+            "analysis_retry_max_seconds",
+            "analysis_qa_ready_deadline_seconds",
+            "analysis_sweeper_interval_seconds",
+            "analysis_sweeper_batch_size",
+            "analysis_republish_after_seconds",
+            "analysis_sweeper_lookback_hours",
+            "analysis_max_message_chars",
+            "analysis_max_transcript_chars",
+            "analysis_max_output_bytes",
+            "analysis_budget_recheck_seconds",
+            "analysis_max_attempts",
+        ):
+            if getattr(self, name) <= 0:
+                problems.append(f"{name.upper()} must be > 0")
+        if self.analysis_initial_delay_seconds < 0:
+            problems.append("ANALYSIS_INITIAL_DELAY_SECONDS must be >= 0")
+        if self.analysis_retry_max_seconds < self.analysis_retry_base_seconds:
+            problems.append("ANALYSIS_RETRY_MAX_SECONDS must be >= ANALYSIS_RETRY_BASE_SECONDS")
+        if self.dograh_qa_min_duration_seconds < 0:
+            problems.append("DOGRAH_QA_MIN_DURATION_SECONDS must be >= 0")
+        # A lease shorter than one Dograh fetch (connect + read, with headroom) would let a
+        # healthy worker lose its claim mid-request.
+        longest_fetch = 2 * (self.dograh_connect_timeout_seconds + self.dograh_read_timeout_seconds)
+        if self.analysis_lease_seconds <= longest_fetch:
+            problems.append(
+                "ANALYSIS_LEASE_SECONDS must exceed 2 x (DOGRAH_CONNECT_TIMEOUT_SECONDS + "
+                f"DOGRAH_READ_TIMEOUT_SECONDS) = {longest_fetch:g}s"
+            )
+        for name in ("analysis_daily_estimated_spend_cap", "analysis_estimated_cost_per_analysis"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                problems.append(f"{name.upper()} must be >= 0")
+        if (self.analysis_daily_estimated_spend_cap is None) != (
+            self.analysis_estimated_cost_per_analysis is None
+        ):
+            problems.append(
+                "ANALYSIS_DAILY_ESTIMATED_SPEND_CAP and ANALYSIS_ESTIMATED_COST_PER_ANALYSIS "
+                "must be set together"
+            )
 
         if problems:
             raise ValueError(
