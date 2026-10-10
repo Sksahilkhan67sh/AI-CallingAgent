@@ -101,7 +101,7 @@ Source: public repository `dograh-hq/dograh`, shallow clone at commit `b121f43` 
 
 1. **No API key is needed (or should be sent) to download.** The documented public route is unauthenticated. The downloader must send **no credentials**, which removes the key-forwarding-on-redirect risk but leaves the token itself as a secret: the webhook URL contains it and must never be logged or stored.
 2. **Two hosts need allow-listing**: Dograh's API host (the URL in the webhook, = `DOGRAH_API_BASE_URL` host if same deployment — UNVERIFIED) and the storage host in the redirect. The storage host cannot be known from the repo. BLOCKED on owner decision.
-3. **Latent contract bug in our webhook schema (VERIFIED FROM SOURCE CODE, behavior NOT VERIFIED):** `DograhWebhookPayload` rejects any `recording_url` not starting with `http(s)://`. In Dograh's no-token branch the value is a bare storage key, which would fail validation and could cause the **whole webhook** to be rejected. Campaign runs always get a token, so the normal path is unaffected. Needs a decision (accept-and-ignore non-URL values) and a test; not changed here.
+3. **Latent contract bug in our webhook schema (VERIFIED FROM SOURCE CODE, behavior NOT VERIFIED):** `DograhWebhookPayload` rejects any `recording_url` not starting with `http(s)://`. In Dograh's no-token branch the value is a bare storage key, which would fail validation and could cause the **whole webhook** to be rejected. Campaign runs always get a token, so the normal path is unaffected. **FIXED** in commit `fix(webhook): make recording_url advisory…`: non-URL values normalise to `None`; covered by tests (see git log).
 4. **The token is permanent.** Any copy of a recording URL in our logs, DB, or error reports is a long-lived credential. Persist only `(workflow_id, run_id)` and re-fetch via `get_run` when needed (this returns the token over the authenticated API).
 5. **Dograh copy cannot be erased by us or by API.** After CP15 stores an application copy and the owner deletes it, the original WAV remains in Dograh storage and remains reachable by anyone holding the token. Any "deleted" status must say *application copy deleted; provider copy retained* unless the owner administers Dograh's bucket directly.
 6. **Non-granted consent**: Dograh records according to its own workflow configuration, independent of our `recording_consent` field. A recording can therefore exist at Dograh for a call whose consent we classify as denied/unclear. CP15 can refuse to copy it, but cannot delete the provider copy via API. This is a compliance risk to raise with the owner, not something CP15 can solve in code.
@@ -115,7 +115,7 @@ Source: public repository `dograh-hq/dograh`, shallow clone at commit `b121f43` 
 | Size / format | 89 bytes, RDB version `0010` header |
 | Content | Parsed structurally: 5 header metadata fields (`redis-ver`, `redis-bits`, `ctime`, `used-mem`, `aof-base`), then the end-of-file marker — **zero keys, zero databases** |
 | Sensitive data | None found (no keys exist). Values of the header fields were not printed |
-| Action | **None taken.** Recommend a separate commit: `git rm --cached backend/dump.rdb` and add `*.rdb` to `.gitignore`. Awaiting approval. Removing it does not rewrite history |
+| Action | **Done in a separate hygiene commit (`chore: untrack empty Redis snapshot…`):** file removed from the tree, `*.rdb`, `*.aof`, `appendonlydir/` added to `.gitignore`. No history rewrite; the blob remains in `bc346fe` (harmless: zero keys). Nothing in the repo referenced the file |
 
 ## 9. Verification status of this checkpoint so far
 
@@ -125,3 +125,35 @@ Source: public repository `dograh-hq/dograh`, shallow clone at commit `b121f43` 
 | Dograh source reviewed | VERIFIED FROM SOURCE CODE (commit `b121f43`) |
 | Any live Dograh call/download | NOT VERIFIED — no authorized credentials/instance used |
 | Tests, migrations, `alembic check`, build, restore drill | **NOT RUN** — no code changed; sandbox has no Postgres/Redis/Docker |
+
+## 10. Provider-side recording-consent blocker (BLOCKER, NOT SOLVED)
+
+**Statement.** Backend ingestion gating (store/serve audio only if `recording_consent == GRANTED`) is necessary but **not sufficient**. It controls only our *copy*. It cannot stop Dograh from recording, and it cannot delete Dograh's audio. `Recording-Consent.md` requires that audio is not retained without consent; our backend cannot satisfy that on its own.
+
+**Evidence (all VERIFIED FROM SOURCE CODE, `dograh-hq/dograh` @ `b121f43`; NOT VERIFIED against the owner's deployed version or configuration):**
+
+| Fact | Source |
+|---|---|
+| Audio capture starts in the `on_client_connected` handler (`audio_buffer.start_recording()`), i.e. when the call media connects, **before** the greeting or any consent question, and with no consent or per-workflow condition in that path | `api/services/pipecat/event_handlers.py` |
+| At call end, mixed/user/bot WAV are uploaded to the configured store and `recording_url` + `extra.recordings` are written — unconditionally, unless the global flag below is off | `event_handlers.py`, `api/services/workflow_run_artifacts.py` |
+| The **only** switch found is the instance-wide environment variable `ENABLE_CALL_RECORDING_UPLOAD` (default `true`). When `false`, audio is still buffered in memory during the call, but it is **not uploaded**, and no `recording_url` or recording metadata is produced | `api/constants.py`, `event_handlers.py` |
+| No per-call, per-campaign, per-workflow, or consent-triggered recording control was found | grep of the source; absence of evidence, not proof for other versions |
+| No delete method exists in the storage abstraction and no retention for recordings | see §7 |
+
+**Consequences.**
+1. For every connected call, audio of the opening (including the agent's consent question and the caller's answer) is captured by Dograh whenever upload is enabled, regardless of the eventual consent outcome.
+2. A recording can therefore exist at Dograh for a call we classify `DENIED`, `UNCLEAR`, or `NULL`. CP15 can decline to copy it. It cannot erase it.
+3. Dograh's public download token is permanent (§7), so that retained audio stays reachable by anyone who holds the token.
+
+**Exact prerequisite to guarantee "no recording before valid consent"** (one of the following must be true and then *verified against the deployed Dograh configuration*; none is verified today):
+- **(A) Provider recording persistence disabled:** the Dograh instance runs with `ENABLE_CALL_RECORDING_UPLOAD=false`. Effect: no persistent recordings exist, so CP15 recording ingestion has nothing to ingest (CP15 would then be transcript/analysis/backup only). Audio is still held in process memory during the call (Dograh's own comment says integrations consume it).
+- **(B) Consent-triggered recording start:** the Dograh version/configuration supports starting capture only after consent is given. **No such capability was found in source.** Would require a Dograh change or a documented feature; NOT VERIFIED to exist.
+- **(C) Legal determination:** the owner/legal counsel decides, in writing, that capturing the consent exchange itself and deleting non-consented audio afterward is acceptable for the jurisdictions called. This is a legal decision, not an engineering one, and **deletion at Dograh is BLOCKED** so "delete afterward" would need operator-level bucket deletion.
+
+**What would count as verified** (not yet done): a documented check of the deployed instance's `ENABLE_CALL_RECORDING_UPLOAD` value (or its replacement), and an authorized synthetic call showing the resulting run has the expected recording state (none for A; none until consent for B). Until then CP15 documentation, runbooks, and PR text must say *consent gating is partial: application copy only*.
+
+**Decision needed from the owner:** choose A, B, or C (or a combination), and provide the deployed Dograh version and its recording configuration so it can be verified.
+
+## 11. Additional finding: `transcript_url` has the same bare-key hazard (NOT FIXED, decision needed)
+
+In Dograh's no-token branch, `transcript_url` is also rendered as a bare storage key (`transcripts/123.txt`, `api/tasks/run_integrations.py`). Our schema still requires `http(s)` for `transcript_url`, so such a webhook would still be rejected with 422 (VERIFIED FROM SOURCE for Dograh's value; our rejection VERIFIED BY TEST). It was deliberately **not** changed because the transcript URL **is fetched** (SSRF-guarded), so loosening it has different trade-offs. Campaign runs always receive a token, so the normal path is unaffected. Recommended: same advisory normalisation (non-URL → "no transcript URL", fall back to the existing `get_run` path), with its own review.
