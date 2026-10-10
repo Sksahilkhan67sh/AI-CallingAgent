@@ -51,9 +51,38 @@ class DograhWebhookPayload(BaseModel):
     transcript_url: str | None = Field(default=None, max_length=_MAX_URL_LEN)
     call_time: str | None = Field(default=None, max_length=128)
 
-    @field_validator("recording_url", "transcript_url")
+    @field_validator("recording_url", mode="before")
+    @classmethod
+    def _recording_url_is_advisory(cls, value: object) -> str | None:
+        """CP15 prep: `recording_url` is advisory and must never reject a webhook.
+
+        Dograh renders `{{recording_url}}` as a public download URL when the run has a public
+        token, but as the bare storage key (e.g. ``recordings/123.wav``) when it has none (Dograh
+        source, api/tasks/run_integrations.py). A bare key, a non-string, an over-long value or
+        anything that is not a clean http(s) URL is therefore normalized to ``None`` ("no
+        downloadable recording") instead of failing validation and losing the whole call result.
+
+        This value is NOT trusted, NOT fetched, and NOT persisted by anything today (no consumer
+        exists). Any future downloader must re-fetch the run via the authenticated `get_run`
+        and apply its own host allow-list/SSRF policy; it must never use this string as-is. A
+        Dograh public-download URL embeds a permanent bearer token, so it must not be logged.
+        """
+        if not isinstance(value, str):
+            return None
+        candidate = value.strip()
+        if not candidate or len(candidate) > _MAX_URL_LEN:
+            return None
+        if not (candidate.startswith("http://") or candidate.startswith("https://")):
+            return None
+        if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in candidate):
+            return None
+        return candidate
+
+    @field_validator("transcript_url")
     @classmethod
     def _must_be_http_url_if_present(cls, value: str | None) -> str | None:
+        # Unchanged: the transcript URL IS fetched (transcript_fetch.py, SSRF-guarded), so it stays
+        # strictly validated here as the first line of defence.
         if value is not None and not (value.startswith("http://") or value.startswith("https://")):
             raise ValueError("must be an http(s) URL")
         return value

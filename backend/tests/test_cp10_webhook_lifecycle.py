@@ -304,7 +304,7 @@ def test_malformed_authenticated_payload_mutates_nothing(client, db_session):
     _, _, attempt = _attempt(db_session, phone="989-980-0013")
     response = client.post(
         URL,
-        json={"call_attempt_id": str(attempt.id), "recording_url": "file:///etc/passwd"},
+        json={"call_attempt_id": str(attempt.id), "transcript_url": "file:///etc/passwd"},
         headers={"Authorization": f"Bearer {get_settings().dograh_webhook_secret}"},
     )
     assert response.status_code == 422
