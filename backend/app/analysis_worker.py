@@ -18,6 +18,7 @@ one worker per job.
 import logging
 import signal
 import socket
+import time
 import uuid
 from datetime import UTC, datetime
 from types import FrameType
@@ -28,6 +29,7 @@ from app.core.redis_client import get_redis
 from app.services.admin.system_service import ANALYSIS_HEARTBEAT_KEY
 from app.services.analysis.factory import get_analysis_queue
 from app.services.analysis.llm.factory import get_analysis_llm_provider
+from app.services.analysis.sweeper import sweep
 from app.services.analysis.worker import (
     AnalysisJobOutcome,
     process_claimed_job,
@@ -71,6 +73,7 @@ def run() -> None:
     logger.info("analysis_worker_started", extra={"consumer_name": consumer_name})
 
     reclaim_counter = 0
+    last_sweep = 0.0
     try:
         while not _shutdown_requested:
             db = SessionLocal()
@@ -85,13 +88,22 @@ def run() -> None:
                         consumer_name, get_settings().analysis_reclaim_idle_ms
                     )
                     for message_id, reclaimed_job in reclaimed:
-                        outcome = process_claimed_job(
-                            db, queue, llm, message_id, reclaimed_job
-                        )
+                        outcome = process_claimed_job(db, queue, llm, message_id, reclaimed_job)
                         db.commit()
-                        logger.info(
-                            "reclaimed_analysis_job_processed", extra={"outcome": outcome}
-                        )
+                        logger.info("reclaimed_analysis_job_processed", extra={"outcome": outcome})
+
+                # CP14B: durable recovery. Idempotent and safe to run in every worker process;
+                # a Redis/DB failure here must never stop job processing.
+                if (
+                    time.monotonic() - last_sweep
+                    >= get_settings().analysis_sweeper_interval_seconds
+                ):
+                    last_sweep = time.monotonic()
+                    try:
+                        sweep(db, queue)
+                    except Exception:
+                        db.rollback()
+                        logger.exception("analysis_sweep_error")
 
                 outcome = process_one_analysis_job(db, queue, llm, consumer_name=consumer_name)
                 db.commit()
@@ -100,6 +112,8 @@ def run() -> None:
 
                 _write_heartbeat()
             except Exception:
+                # No ack happened for a failed job: its claim lease expires and the sweeper /
+                # stream reclaim recover it (never lost, never double-acked).
                 db.rollback()
                 logger.exception("analysis_job_processing_error")
             finally:

@@ -9,6 +9,7 @@ real-provider concern; this fake exists to test the CP06 pipeline
 
 from app.models.enums import AnalysisIntent, AnalysisNextAction, AnalysisSentiment, InterestStatus
 from app.services.analysis.llm.base import (
+    AnalysisContext,
     AnalysisLLM,
     AnalysisLLMProviderError,
     AnalysisLLMTimeoutError,
@@ -30,7 +31,13 @@ class FakeAnalysisLLM(AnalysisLLM):
         self.force_error = False
         self.force_malformed = False
 
-    def analyze(self, transcript_lines: list[str], *, brand_name: str) -> AnalysisResult:
+    def analyze(
+        self,
+        transcript_lines: list[str],
+        *,
+        brand_name: str,
+        context: AnalysisContext | None = None,
+    ) -> AnalysisResult:
         self.calls.append(transcript_lines)
 
         if self.force_timeout:

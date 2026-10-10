@@ -222,7 +222,11 @@ def test_a_single_head_and_the_step_between_is_reversible(scratch):
     cfg, engine = scratch
     from alembic.script import ScriptDirectory
 
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["c14b4e5f6a7b"]
+    scripts = ScriptDirectory.from_config(cfg)
+    # CP14B intentionally moved the head to a83d13f0c415 (its additive migration). Still a
+    # SINGLE head, and CP14's last migration must remain its direct parent (chain intact).
+    assert scripts.get_heads() == ["a83d13f0c415"]
+    assert scripts.get_revision("a83d13f0c415").down_revision == "c14b4e5f6a7b"
     command.upgrade(cfg, "head")
     command.downgrade(cfg, PRE_CP14)
     assert "timezone" not in _cols(engine, "campaign")

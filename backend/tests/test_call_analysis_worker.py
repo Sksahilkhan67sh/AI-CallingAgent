@@ -3,6 +3,7 @@
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
 from app.models.call_analysis import CallAnalysis
@@ -83,7 +84,10 @@ def test_worker_completes_analysis_on_valid_llm_response(db_session, redis_clien
     assert len(llm.calls) == 1
 
 
-def test_worker_handles_empty_transcript_without_calling_llm(db_session, redis_client):
+def test_worker_skips_empty_conversation_without_calling_llm(db_session, redis_client):
+    """CP14B contract change (was: COMPLETED with an UNKNOWN result). An empty conversation
+    must never be recorded as a successful zero-interest analysis -- it is SKIPPED, with a
+    sanitized reason, and the LLM is never called."""
     _, contact, attempt, _ = _admitted(db_session, phone="989-300-0002", contact_text=None)
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
@@ -91,16 +95,20 @@ def test_worker_handles_empty_transcript_without_calling_llm(db_session, redis_c
     outcome = process_one_analysis_job(db_session, queue, llm, consumer_name="w1")
     db_session.commit()
 
-    assert outcome == AnalysisJobOutcome.COMPLETED
+    assert outcome == AnalysisJobOutcome.SKIPPED
     analysis = (
         db_session.query(CallAnalysis).filter(CallAnalysis.call_attempt_id == attempt.id).one()
     )
-    assert analysis.status == AnalysisStatus.COMPLETED
-    assert analysis.next_action.value == "manual_review"
+    assert analysis.status == AnalysisStatus.SKIPPED
+    assert analysis.error_code == "empty_conversation"
+    assert analysis.summary is None and analysis.interest_status is None
     assert len(llm.calls) == 0  # cost control: no LLM call for nothing to analyze
 
 
-def test_worker_on_llm_timeout_leaves_job_unacked_for_retry(db_session, redis_client):
+def test_worker_on_llm_timeout_records_durable_retry_state_then_acks(db_session, redis_client):
+    """CP14B contract change (was: left UNACKED, status FAILED). The retry state is committed
+    first (RETRY_WAIT + next_attempt_at); only then is the job acked. The sweeper republishes
+    it when due, so nothing relies on an unacked message for backoff any more."""
     _, contact, attempt, _ = _admitted(db_session, phone="989-300-0003")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
@@ -113,12 +121,13 @@ def test_worker_on_llm_timeout_leaves_job_unacked_for_retry(db_session, redis_cl
     analysis = (
         db_session.query(CallAnalysis).filter(CallAnalysis.call_attempt_id == attempt.id).one()
     )
-    assert analysis.status == AnalysisStatus.FAILED
-    assert analysis.error_code == "AnalysisLLMTimeoutError"
+    assert analysis.status == AnalysisStatus.RETRY_WAIT
+    assert analysis.error_code == "provider_timeout"  # sanitized code, not an exception string
+    assert analysis.error_message is None
     assert analysis.attempt_count == 1
-    # Not acked -- still pending delivery in the consumer group.
-    pending = redis_client.xpending(queue.stream_key, queue.group)
-    assert pending["pending"] == 1
+    assert analysis.next_attempt_at is not None
+    assert analysis.lease_expires_at is None and analysis.claim_token is None
+    assert redis_client.xpending(queue.stream_key, queue.group)["pending"] == 0
 
 
 def test_worker_on_provider_error_retries_then_terminally_fails(db_session, redis_client):
@@ -132,19 +141,24 @@ def test_worker_on_provider_error_retries_then_terminally_fails(db_session, redi
     message_id, job = read
 
     max_attempts = get_settings().analysis_max_attempts
+    clock_now = datetime.now(UTC)
     outcome = None
     for _ in range(max_attempts):
-        outcome = process_claimed_job(db_session, queue, llm, message_id, job)
+        # CP14B: a retry is only claimable once its next_attempt_at has arrived.
+        clock_now += timedelta(hours=1)
+        outcome = process_claimed_job(
+            db_session, queue, llm, message_id, job, clock=lambda now=clock_now: now
+        )
         db_session.commit()
 
     assert outcome == AnalysisJobOutcome.FAILED_TERMINAL
     analysis = (
         db_session.query(CallAnalysis).filter(CallAnalysis.call_attempt_id == attempt.id).one()
     )
-    assert analysis.status == AnalysisStatus.FAILED
+    assert analysis.status == AnalysisStatus.FAILED  # terminal ("FAILED_FINAL")
     assert analysis.attempt_count == max_attempts
-    pending = redis_client.xpending(queue.stream_key, queue.group)
-    assert pending["pending"] == 0  # acked once terminally failed -- never retried again
+    assert len(llm.calls) == max_attempts  # exactly one provider request per attempt
+    assert redis_client.xpending(queue.stream_key, queue.group)["pending"] == 0
 
 
 def test_malformed_llm_output_does_not_get_persisted_as_valid(db_session, redis_client):
@@ -160,7 +174,8 @@ def test_malformed_llm_output_does_not_get_persisted_as_valid(db_session, redis_
     analysis = (
         db_session.query(CallAnalysis).filter(CallAnalysis.call_attempt_id == attempt.id).one()
     )
-    assert analysis.status == AnalysisStatus.FAILED
+    assert analysis.status == AnalysisStatus.RETRY_WAIT  # bounded retry (was FAILED+unacked)
+    assert analysis.error_code == "invalid_output"
     assert analysis.summary is None  # never fabricated a default result
 
 
@@ -188,29 +203,35 @@ def test_already_completed_analysis_is_a_no_op_on_redelivery(db_session, redis_c
     assert len(llm.calls) == 1  # LLM never called a second time
 
 
-def test_reclaim_stale_redelivers_an_unacked_job_to_another_worker(db_session, redis_client):
+def test_retry_wait_job_succeeds_when_redelivered_after_it_is_due(db_session, redis_client):
+    """CP14B replacement for the old reclaim-as-backoff test: after a transient failure the
+    row waits in RETRY_WAIT; once due, a redelivery (here a manual republish, normally the
+    sweeper) completes it. The retry consumed exactly two attempts."""
     _, contact, attempt, _ = _admitted(db_session, phone="989-300-0007")
     queue = get_analysis_queue()
     llm = FakeAnalysisLLM()
     llm.force_timeout = True
 
-    # First worker reads it, fails transiently, leaves it unacked.
     outcome = process_one_analysis_job(db_session, queue, llm, consumer_name="worker-a")
     db_session.commit()
     assert outcome == AnalysisJobOutcome.FAILED_RETRIABLE
 
-    # A second worker reclaims it after the idle window and succeeds.
     llm.force_timeout = False
-    reclaimed = queue.reclaim_stale("worker-b", idle_ms=0)
-    assert len(reclaimed) == 1
-    message_id, job = reclaimed[0]
-    outcome = process_claimed_job(db_session, queue, llm, message_id, job)
-    db_session.commit()
-
-    assert outcome == AnalysisJobOutcome.COMPLETED
     analysis = (
         db_session.query(CallAnalysis).filter(CallAnalysis.call_attempt_id == attempt.id).one()
     )
+    from app.services.analysis.admission import job_for
+
+    queue.enqueue(job_for(analysis))
+    read = queue.read_one("worker-b", block_ms=100)
+    assert read is not None
+    message_id, job = read
+    later = datetime.now(UTC) + timedelta(hours=1)
+    outcome = process_claimed_job(db_session, queue, llm, message_id, job, clock=lambda: later)
+    db_session.commit()
+
+    assert outcome == AnalysisJobOutcome.COMPLETED
+    db_session.refresh(analysis)
     assert analysis.status == AnalysisStatus.COMPLETED
     assert analysis.attempt_count == 2  # one failed attempt + one successful
 

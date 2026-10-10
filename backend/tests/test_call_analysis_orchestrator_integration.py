@@ -21,6 +21,8 @@ def test_normal_call_completion_admits_analysis(db_session, redis_client):
     )
     assert analysis.status.value == "pending"
     queue = get_analysis_queue()
+    # CP14B: the job is published only after the transaction commits.
+    db_session.commit()
     assert redis_client.xlen(queue.stream_key) == 1
 
 
