@@ -19,3 +19,8 @@ out/
 
 # OS
 .DS_Store
+
+# Redis runtime snapshots (never commit; may contain call data)
+*.rdb
+*.aof
+appendonlydir/
