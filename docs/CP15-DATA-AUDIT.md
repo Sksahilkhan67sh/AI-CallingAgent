@@ -78,6 +78,50 @@ Consequence: **retrieval is documented; deletion and retention at Dograh are not
 | PITR | **BLOCKED** until production Postgres hosting is known; a `pg_dump` is not PITR |
 | Alerting integration | None found; logs only |
 
-## 7. Owner decisions required before implementation
+## 7. Addendum — Dograh source-code audit (second pass)
 
-See `docs/CP15-ARCHITECTURE.md` §9.
+Source: public repository `dograh-hq/dograh`, shallow clone at commit `b121f43` (2026-10-08), read only. This verifies what the **open-source code does**; it does **not** prove what the owner's deployed instance does (version, configuration, and storage backend are unknown). Labels: VERIFIED FROM DOCUMENTATION · VERIFIED FROM SOURCE CODE · VERIFIED BY LIVE TEST · NOT VERIFIED · BLOCKED. **No item below is VERIFIED BY LIVE TEST.**
+
+| Topic | Finding | Label |
+|---|---|---|
+| Webhook `recording_url` value | When the run has a public token (always for campaign runs and runs with webhook/QA nodes): `{BACKEND_API_ENDPOINT}/api/v1/public/download/workflow/{token}/recording`. Host is Dograh's **own API host**, not the storage host. Without a token the field is the **raw storage key** (e.g. `recordings/123.wav`), not a URL | SOURCE CODE (`api/tasks/run_integrations.py`) |
+| Public download authentication | **None.** Lookup is by token equality only; no expiry, no revocation field read. The token is a permanent bearer credential for that run's audio and transcript | SOURCE CODE (`api/routes/public_download.py`, `workflow_run_client.py`) |
+| Redirect behavior | 302 to a freshly generated signed storage URL. Host = `MINIO_PUBLIC_ENDPOINT` (self-hosted MinIO) or the S3 endpoint/bucket host | SOURCE CODE + DOCS |
+| Signed URL expiry | 3600 s, generated per request | SOURCE CODE |
+| Audio format | WAV (`recordings/{run}.wav` mixed; `/user.wav`, `/bot.wav`). Per-track metadata stores `format: "wav"` | SOURCE CODE (`workflow_run_artifacts.py`) |
+| Availability timing | Artifacts are uploaded **before** the completion job is enqueued, so recordings should exist when the webhook fires. An upload failure is only logged; the run then has no recording and the webhook field is `null`/absent | SOURCE CODE. Not live-tested |
+| Per-artifact failure | Mixed/user/bot/transcript uploads are independent; one can fail while others succeed | SOURCE CODE |
+| Storage backends | S3 (incl. custom endpoint) and MinIO; local/null filesystems exist | SOURCE CODE |
+| Recording/transcript deletion | **No delete method** in the storage abstraction (`api/services/filesystem/base.py`), and no deletion route found | SOURCE CODE → deletion BLOCKED |
+| Retention for recordings | **None found.** Only `LOG_RETENTION` (log files). Recordings persist until the operator manages the bucket | SOURCE CODE |
+| Recording lifecycle webhooks | None found; only the post-run webhook node | SOURCE + DOCS |
+| Run id as idempotency key | `workflow_run_id` is a DB integer; unique within one Dograh database. Scope by `(dograh_workflow_id, run_id)` | SOURCE CODE |
+
+### Consequences for design
+
+1. **No API key is needed (or should be sent) to download.** The documented public route is unauthenticated. The downloader must send **no credentials**, which removes the key-forwarding-on-redirect risk but leaves the token itself as a secret: the webhook URL contains it and must never be logged or stored.
+2. **Two hosts need allow-listing**: Dograh's API host (the URL in the webhook, = `DOGRAH_API_BASE_URL` host if same deployment — UNVERIFIED) and the storage host in the redirect. The storage host cannot be known from the repo. BLOCKED on owner decision.
+3. **Latent contract bug in our webhook schema (VERIFIED FROM SOURCE CODE, behavior NOT VERIFIED):** `DograhWebhookPayload` rejects any `recording_url` not starting with `http(s)://`. In Dograh's no-token branch the value is a bare storage key, which would fail validation and could cause the **whole webhook** to be rejected. Campaign runs always get a token, so the normal path is unaffected. Needs a decision (accept-and-ignore non-URL values) and a test; not changed here.
+4. **The token is permanent.** Any copy of a recording URL in our logs, DB, or error reports is a long-lived credential. Persist only `(workflow_id, run_id)` and re-fetch via `get_run` when needed (this returns the token over the authenticated API).
+5. **Dograh copy cannot be erased by us or by API.** After CP15 stores an application copy and the owner deletes it, the original WAV remains in Dograh storage and remains reachable by anyone holding the token. Any "deleted" status must say *application copy deleted; provider copy retained* unless the owner administers Dograh's bucket directly.
+6. **Non-granted consent**: Dograh records according to its own workflow configuration, independent of our `recording_consent` field. A recording can therefore exist at Dograh for a call whose consent we classify as denied/unclear. CP15 can refuse to copy it, but cannot delete the provider copy via API. This is a compliance risk to raise with the owner, not something CP15 can solve in code.
+
+## 8. `backend/dump.rdb` (inspected without exposing content)
+
+| Item | Result |
+|---|---|
+| Tracked in git | Yes, since commit `bc346fe` (2026-10-08, "checkpoint-13: harden dograh provider handling"); only that commit touches it |
+| Ignored by `.gitignore` | No (`*.rdb` rule absent) |
+| Size / format | 89 bytes, RDB version `0010` header |
+| Content | Parsed structurally: 5 header metadata fields (`redis-ver`, `redis-bits`, `ctime`, `used-mem`, `aof-base`), then the end-of-file marker — **zero keys, zero databases** |
+| Sensitive data | None found (no keys exist). Values of the header fields were not printed |
+| Action | **None taken.** Recommend a separate commit: `git rm --cached backend/dump.rdb` and add `*.rdb` to `.gitignore`. Awaiting approval. Removing it does not rewrite history |
+
+## 9. Verification status of this checkpoint so far
+
+| Item | Status |
+|---|---|
+| Dograh docs reviewed | VERIFIED FROM DOCUMENTATION (see §4) |
+| Dograh source reviewed | VERIFIED FROM SOURCE CODE (commit `b121f43`) |
+| Any live Dograh call/download | NOT VERIFIED — no authorized credentials/instance used |
+| Tests, migrations, `alembic check`, build, restore drill | **NOT RUN** — no code changed; sandbox has no Postgres/Redis/Docker |
