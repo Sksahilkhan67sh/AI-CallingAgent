@@ -137,6 +137,10 @@ def test_duplicate_admission_does_not_enqueue_a_second_redis_job(db_session, red
 
     enqueue_call_analysis(db_session, attempt, contact)
     enqueue_call_analysis(db_session, attempt, contact)
+    # CP14B: publication happens only AFTER the caller's commit (never before the row is
+    # durable), so the job is visible in Redis only once the transaction commits.
+    assert redis_client.xlen(queue.stream_key) == 0
+    db_session.commit()
 
     length = redis_client.xlen(queue.stream_key)
     assert length == 1

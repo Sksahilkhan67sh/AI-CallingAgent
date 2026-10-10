@@ -132,6 +132,16 @@ def _parse_duration(value: float | str | None) -> float | None:
     return min(seconds, _MAX_DURATION_SECONDS)
 
 
+def _parse_positive_int(value: int | str | None) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _already_processed(payload: DograhWebhookPayload) -> "DograhWebhookResult":
     try:
         attempt_id = uuid.UUID(payload.call_attempt_id)
@@ -329,6 +339,12 @@ def process_dograh_webhook(db: Session, payload: DograhWebhookPayload) -> Dograh
     duration = _parse_duration(payload.duration_seconds)
     if duration is not None:
         attempt.duration_seconds = duration
+
+    # CP14B: remember which Dograh workflow produced this run (first value wins; redelivery
+    # is a no-op). Needed later to fetch the run's QA annotations.
+    workflow_id = _parse_positive_int(payload.workflow_id)
+    if workflow_id is not None and attempt.dograh_workflow_id is None:
+        attempt.dograh_workflow_id = workflow_id
 
     if unresolved_ambiguous:
         reopen_for_adoption(attempt, contact)

@@ -52,24 +52,36 @@ def prepare_transcript(db: Session, session: ConversationSession) -> PreparedTra
         .all()
     )
 
+    settings = get_settings()
+    max_message_chars = settings.analysis_max_message_chars
+    truncated = False
+
     lines: list[str] = []
     for row in rows:
         content = " ".join(row.content.split())  # collapse duplicate whitespace
         if not content:
             continue  # malformed/empty message artifact -- dropped, not fabricated
+        if len(content) > max_message_chars:
+            content = content[:max_message_chars]  # bound each message; flagged below
+            truncated = True
         lines.append(f"{row.role.value}: {content}")
 
-    max_messages = get_settings().analysis_max_transcript_messages
-    truncated = False
+    max_messages = settings.analysis_max_transcript_messages
     if len(lines) > max_messages:
-        # §30: preserve beginning, ending, and outcome over the noisy
-        # middle when truncation is unavoidable -- keep the first third
-        # and the last two-thirds of the budget from the end, which
-        # skews toward the ending/outcome where the disposition usually
-        # becomes clear, while still keeping the opening for context.
+        # §30: preserve beginning, ending, and outcome over the noisy middle when truncation
+        # is unavoidable -- keep the first third and the remaining budget from the end,
+        # which skews toward the ending/outcome where the disposition usually becomes clear.
         head = max_messages // 3
         tail = max_messages - head
         lines = lines[:head] + lines[-tail:]
+        truncated = True
+
+    # CP14B: a total-character bound too (message counts alone do not bound size). Keep the
+    # opening (1/3 of the budget) and the ending (2/3), drop the middle. Characters are NOT an
+    # exact token guarantee.
+    max_chars = settings.analysis_max_transcript_chars
+    if sum(len(line) for line in lines) > max_chars:
+        lines = _fit_chars(lines, max_chars)
         truncated = True
 
     duration_seconds = None
@@ -82,3 +94,24 @@ def prepare_transcript(db: Session, session: ConversationSession) -> PreparedTra
         duration_seconds=duration_seconds,
         truncated=truncated,
     )
+
+
+def _fit_chars(lines: list[str], budget: int) -> list[str]:
+    head_budget = budget // 3
+    tail_budget = budget - head_budget
+    head: list[str] = []
+    used = 0
+    for line in lines:
+        if used + len(line) > head_budget:
+            break
+        head.append(line)
+        used += len(line)
+    tail: list[str] = []
+    used = 0
+    for line in reversed(lines[len(head) :]):
+        if used + len(line) > tail_budget:
+            break
+        tail.append(line)
+        used += len(line)
+    tail.reverse()
+    return head + tail

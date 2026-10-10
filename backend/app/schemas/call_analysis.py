@@ -45,6 +45,8 @@ class CallAnalysisResponse(BaseModel):
 
     input_message_count: int | None
     input_duration_seconds: float | None
+    truncated: bool
+    next_attempt_at: datetime | None
 
     error_code: str | None
     error_message: str | None

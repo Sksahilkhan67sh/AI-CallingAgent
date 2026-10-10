@@ -9,7 +9,16 @@ deliberately -- they are different taxonomies and must not be collapsed
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -68,6 +77,10 @@ class CallAttempt(Base):
     # docs/CHECKPOINT-03-NOTES.md).
     provider: Mapped[str | None] = mapped_column(String, nullable=True)
     provider_call_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # CP14B: Dograh's workflow (agent) id, needed -- with provider_call_id, which
+    # holds the Dograh workflow_run_id -- to GET the run's QA annotations.
+    # Persisted from the webhook's `workflow_id` (or DOGRAH_WORKFLOW_ID).
+    dograh_workflow_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

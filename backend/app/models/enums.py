@@ -140,17 +140,29 @@ class NextAction(str, enum.Enum):
 class AnalysisStatus(str, enum.Enum):
     """Checkpoint 06 §5 -- CallAnalysis lifecycle.
 
-    PENDING -> PROCESSING -> COMPLETED, or PROCESSING -> FAILED (retried,
-    bounded by CallAnalysis.attempt_count, back to PROCESSING). COMPLETED
-    is terminal -- never transitions back to PROCESSING without an
-    explicit administrative reprocessing workflow, which this checkpoint
-    does not implement (Checkpoint 06 §29).
+    CP14B state machine (lease + fencing; PostgreSQL is authoritative):
+
+        PENDING --claim--> PROCESSING --valid result--> COMPLETED
+        PROCESSING --transient/rate-limit/invalid output/QA not ready-->
+            RETRY_WAIT (next_attempt_at) --claim when due--> PROCESSING
+        PROCESSING --lease expired--> (re-claimed by a later worker)
+        PROCESSING --permanent error / attempts exhausted--> FAILED
+        PENDING|PROCESSING --no analyzable input / QA never ran--> SKIPPED
+
+    FAILED is TERMINAL (the spec's FAILED_FINAL; the CP06 name is kept so
+    existing rows and the API contract stay valid). Before CP14B it also
+    meant "interim failure, will retry" -- that is now RETRY_WAIT.
+    COMPLETED and SKIPPED are terminal too. Nothing leaves a terminal state
+    without an explicit administrative reprocessing workflow, which CP14B
+    does not implement.
     """
 
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    RETRY_WAIT = "retry_wait"
+    SKIPPED = "skipped"
 
 
 class AnalysisIntent(str, enum.Enum):
