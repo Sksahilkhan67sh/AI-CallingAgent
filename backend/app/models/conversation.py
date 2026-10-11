@@ -13,7 +13,7 @@ producers are implemented here -- persistence only.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -44,6 +44,8 @@ class ConversationMessage(Base):
     __tablename__ = "conversation_message"
     __table_args__ = (
         UniqueConstraint("session_id", "sequence", name="uq_conversation_message_seq"),
+        # CP15: the transcript-retention scan walks messages by age.
+        Index("ix_conversation_message_created_at", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

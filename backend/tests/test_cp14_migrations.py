@@ -223,9 +223,11 @@ def test_a_single_head_and_the_step_between_is_reversible(scratch):
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(cfg)
-    # CP14B intentionally moved the head to a83d13f0c415 (its additive migration). Still a
-    # SINGLE head, and CP14's last migration must remain its direct parent (chain intact).
-    assert scripts.get_heads() == ["a83d13f0c415"]
+    # CP14B intentionally moved the head to a83d13f0c415 (its additive migration) and CP15A
+    # to c15a1b2c3d4e. Still a SINGLE head, and each checkpoint's migration must remain the
+    # direct child of the previous one (chain intact).
+    assert scripts.get_heads() == ["c15a1b2c3d4e"]
+    assert scripts.get_revision("c15a1b2c3d4e").down_revision == "a83d13f0c415"
     assert scripts.get_revision("a83d13f0c415").down_revision == "c14b4e5f6a7b"
     command.upgrade(cfg, "head")
     command.downgrade(cfg, PRE_CP14)

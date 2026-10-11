@@ -9,7 +9,16 @@ docs/CHECKPOINT-01-NOTES.md for the reasoning.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -38,6 +47,12 @@ class Contact(Base):
         default=ContactStatus.PENDING,
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # CP15: legal hold blocks every retention/erasure action on this contact's data.
+    legal_hold: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # CP15: set when the phone fields were scrubbed (retention or erasure).
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
