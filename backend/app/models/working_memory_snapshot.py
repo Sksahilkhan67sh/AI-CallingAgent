@@ -18,7 +18,7 @@ row would lose.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -29,6 +29,8 @@ from app.models.enums import RecordingConsent
 
 class WorkingMemorySnapshot(Base):
     __tablename__ = "working_memory_snapshot"
+    # CP15: the transcript-retention scan walks snapshots by age.
+    __table_args__ = (Index("ix_working_memory_snapshot_snapshotted_at", "snapshotted_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     attempt_id: Mapped[uuid.UUID] = mapped_column(

@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, text
+from sqlalchemy import Boolean, DateTime, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -30,6 +30,13 @@ class Campaign(Base):
     default_region: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text("'IN'")
     )
+    # CP15: a legal hold blocks every retention/erasure action on this campaign's data.
+    legal_hold: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # CP15: when the campaign became COMPLETED (contact-PII retention counts from here).
+    # NULL = unknown/never closed: such a campaign is never auto-purged.
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

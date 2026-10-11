@@ -9,7 +9,7 @@ webhook handler itself is a later checkpoint.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -18,6 +18,8 @@ from app.models.base import Base
 
 class ProcessedEvent(Base):
     __tablename__ = "processed_event"
+    # CP15: the retention scan deletes by age.
+    __table_args__ = (Index("ix_processed_event_received_at", "received_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     event_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)

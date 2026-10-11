@@ -35,6 +35,10 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 _MIN_SECRET_LENGTH = 32
 _MIN_DISTINCT_SECRET_CHARS = 8
 _MIN_PASSWORD_LENGTH = 12
+# CP15: floor for processed-event retention. Dedup rows must outlive the provider's retry
+# horizon or a late retry would be processed twice. The real Dograh horizon is UNVERIFIED;
+# 7 days is an assumption (documented in CHECKPOINT-15A-NOTES).
+_MIN_PROCESSED_EVENT_RETENTION_DAYS = 7
 
 
 class Settings(BaseSettings):
@@ -493,6 +497,72 @@ class Settings(BaseSettings):
         if problems:
             raise ValueError(
                 "Invalid provider/voice configuration:\n  - " + "\n  - ".join(problems)
+            )
+        return self
+
+    # --- CP15A: data lifecycle (retention, erasure) ---------------------------------------
+    # Retention periods in DAYS. None = not set; 0 = keep forever (a deliberate choice).
+    # In production every one must be set explicitly (startup error otherwise); in
+    # development / test / staging an unset value means keep forever. `suppression` has NO
+    # setting: the global do-not-call list is never purged by any lifecycle job.
+    retention_transcript_days: int | None = None  # conversation turns + working memory
+    retention_analysis_days: int | None = None  # call_analysis free text / evidence
+    retention_contact_days: int | None = None  # contact PII, counted from campaign close
+    retention_audit_log_days: int | None = None
+    retention_processed_event_days: int | None = None
+    retention_run_history_days: int | None = None  # retention_run rows
+    retention_batch_size: int = 500
+    retention_max_runtime_seconds: int = 300
+    # HMAC pepper for the erasure_log fingerprint of a normalized number. Required (strong,
+    # distinct) in production; development derives a dev-only value from the JWT key.
+    erasure_fingerprint_pepper: str = ""
+
+    @model_validator(mode="after")
+    def _validate_cp15_config(self) -> "Settings":
+        problems: list[str] = []
+        periods = {
+            "RETENTION_TRANSCRIPT_DAYS": self.retention_transcript_days,
+            "RETENTION_ANALYSIS_DAYS": self.retention_analysis_days,
+            "RETENTION_CONTACT_DAYS": self.retention_contact_days,
+            "RETENTION_AUDIT_LOG_DAYS": self.retention_audit_log_days,
+            "RETENTION_PROCESSED_EVENT_DAYS": self.retention_processed_event_days,
+            "RETENTION_RUN_HISTORY_DAYS": self.retention_run_history_days,
+        }
+        for name, value in periods.items():
+            if value is not None and value < 0:
+                problems.append(f"{name} must be >= 0 (0 = keep forever)")
+        if not 1 <= self.retention_batch_size <= 10_000:
+            problems.append("RETENTION_BATCH_SIZE must be between 1 and 10000")
+        if self.retention_max_runtime_seconds < 1:
+            problems.append("RETENTION_MAX_RUNTIME_SECONDS must be >= 1")
+        if self.environment == "production":
+            for name, value in periods.items():
+                if value is None:
+                    problems.append(
+                        f"{name} must be set explicitly in production (0 = keep forever)"
+                    )
+            processed = self.retention_processed_event_days
+            if processed and processed < _MIN_PROCESSED_EVENT_RETENTION_DAYS:
+                problems.append(
+                    "RETENTION_PROCESSED_EVENT_DAYS must be at least "
+                    f"{_MIN_PROCESSED_EVENT_RETENTION_DAYS} (the assumed provider retry "
+                    "horizon) or 0"
+                )
+            pepper = self.erasure_fingerprint_pepper
+            if len(pepper) < _MIN_SECRET_LENGTH or len(set(pepper)) < _MIN_DISTINCT_SECRET_CHARS:
+                problems.append(
+                    f"ERASURE_FINGERPRINT_PEPPER must be at least {_MIN_SECRET_LENGTH} "
+                    "characters and not repetitive in production"
+                )
+            elif pepper in {
+                self.jwt_signing_key,
+                self.telephony_webhook_secret,
+                self.dograh_webhook_secret,
+            }:
+                problems.append("ERASURE_FINGERPRINT_PEPPER must differ from the other secrets")
+        if problems:
+            raise ValueError(
+                "Invalid data-lifecycle configuration:\n  - " + "\n  - ".join(problems)
             )
         return self
 
