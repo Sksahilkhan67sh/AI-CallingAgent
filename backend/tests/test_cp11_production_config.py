@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from tests.cp15_helpers import CP15_PRODUCTION_SETTINGS
 
 _GOOD = dict(
     environment="production",
@@ -24,6 +25,7 @@ _GOOD = dict(
     admin_username="ops-admin",
     operator_username="ops-operator",
     admin_cors_origins=["https://admin.example.invalid"],
+    **CP15_PRODUCTION_SETTINGS,  # CP15A: required explicitly in production
 )
 
 

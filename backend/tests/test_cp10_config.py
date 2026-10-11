@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
+from tests.cp15_helpers import CP15_PRODUCTION_SETTINGS
 
 _PROD_SECRETS = dict(
     jwt_signing_key="Jx7Qp2mV9rT4wZc8LdN3sH6yB1fKaE5uGo0iXvR2",
@@ -29,6 +30,7 @@ def _production(**overrides) -> Settings:
         dograh_trigger_uuid="33333333-3333-3333-3333-333333333333",
         dograh_trigger_mode="production",
         **_PROD_SECRETS,
+        **CP15_PRODUCTION_SETTINGS,  # CP15A: required explicitly in production
     )
     base.update(overrides)
     return _settings(**base)

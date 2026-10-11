@@ -3,6 +3,7 @@ configuration system is introduced in this checkpoint."""
 
 import logging
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -137,6 +138,8 @@ class CampaignService:
                 f"Cannot transition campaign from {old_status.value} to {new_status.value}"
             )
         campaign.status = new_status
+        if new_status == CampaignStatus.COMPLETED:
+            campaign.closed_at = datetime.now(UTC)  # CP15: contact-PII retention starts here
         record_audit_event(
             self.db,
             actor=self.actor,

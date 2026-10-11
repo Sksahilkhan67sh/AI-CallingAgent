@@ -103,6 +103,10 @@ class DialEligibilityService:
                 False, f"Campaign is {campaign.status.value}, not active"
             )
 
+        # CP15: a scrubbed contact (erasure / retention) holds a placeholder, never a number.
+        if contact.purged_at is not None:
+            return EligibilityResult(False, "Contact data was purged")
+
         # RetryScheduled: Checkpoint 05's RecoveryManager sets this
         # right before scheduling a retry -- it's a legitimate pre-dial
         # status, not just Pending/Dialing from a first attempt.
