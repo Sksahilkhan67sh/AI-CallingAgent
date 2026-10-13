@@ -135,7 +135,8 @@ def _admin_creds() -> dict:
 def test_repro_failed_logins_for_another_user_do_not_lock_out_the_real_admin():
     attacker = _from(_ADDR_A)
     for _ in range(10):
-        assert attacker.post(_LOGIN, json={"username": "nobody", "password": "x"}).status_code == 401
+        bad = {"username": "nobody", "password": "x"}
+        assert attacker.post(_LOGIN, json=bad).status_code == 401
     assert attacker.post(_LOGIN, json=_admin_creds()).status_code == 200
 
 
@@ -192,7 +193,8 @@ def test_limiter_is_atomic_under_concurrent_threads_on_real_redis(redis_client):
 
     def poll() -> None:
         while not stop.is_set():
-            if redis_client.exists("ratelimit:atomic") and redis_client.ttl("ratelimit:atomic") == -1:
+            key = "ratelimit:atomic"
+            if redis_client.exists(key) and redis_client.ttl(key) == -1:
                 saw_no_ttl.append(True)
 
     def hammer() -> None:

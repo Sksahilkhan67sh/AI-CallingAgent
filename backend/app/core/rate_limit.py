@@ -74,7 +74,7 @@ _KEY_PREFIX = "ratelimit:"
 
 
 def _atomic_incr(redis_client: redis.Redis, redis_key: str, window_seconds: int) -> tuple[int, int]:
-    count, ttl = redis_client.eval(_ATOMIC_INCR, 1, redis_key, window_seconds)  # type: ignore[misc]
+    count, ttl = redis_client.eval(_ATOMIC_INCR, 1, redis_key, str(window_seconds))  # type: ignore[misc]
     return int(count), int(ttl)
 
 

@@ -208,14 +208,18 @@ def test_login_limiter_buckets_by_forwarded_client_only_behind_a_trusted_proxy(
     proxy = TestClient(_PeerAddress(app, "10.0.0.2"))
 
     # untrusted proxy: header is ignored, so everyone behind it shares ONE bucket
-    codes = [proxy.post(_LOGIN, json=bad, headers={"X-Forwarded-For": f"203.0.113.{i}"}).status_code
-             for i in range(1, 4)]
+    codes = [
+        proxy.post(_LOGIN, json=bad, headers={"X-Forwarded-For": f"203.0.113.{i}"}).status_code
+        for i in range(1, 4)
+    ]
     assert codes == [401, 429, 429]
 
     # trusted proxy: each real client gets its own bucket
     trust("10.0.0.0/8")
-    codes = [proxy.post(_LOGIN, json=bad, headers={"X-Forwarded-For": f"198.51.100.{i}"}).status_code
-             for i in range(1, 4)]
+    codes = [
+        proxy.post(_LOGIN, json=bad, headers={"X-Forwarded-For": f"198.51.100.{i}"}).status_code
+        for i in range(1, 4)
+    ]
     assert codes == [401, 401, 401]
 
 
