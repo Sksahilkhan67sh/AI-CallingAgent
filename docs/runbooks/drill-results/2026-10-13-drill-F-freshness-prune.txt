@@ -1,0 +1,32 @@
+Drill F (freshness exit codes + GFS prune selection with INJECTED time) -- executed via pytest, SANDBOX run 2026-10-13T06:23:12Z
+command: pytest -v tests/ops/test_ops_freshness_prune.py
+------------------------------------------------------------------------------------------
+tests/ops/test_ops_freshness_prune.py::test_healthy_exits_0_with_machine_readable_json PASSED
+tests/ops/test_ops_freshness_prune.py::test_logical_backup_age_thresholds[25-0] PASSED
+tests/ops/test_ops_freshness_prune.py::test_logical_backup_age_thresholds[26-1] PASSED
+tests/ops/test_ops_freshness_prune.py::test_logical_backup_age_thresholds[49-1] PASSED
+tests/ops/test_ops_freshness_prune.py::test_logical_backup_age_thresholds[50-2] PASSED
+tests/ops/test_ops_freshness_prune.py::test_logical_backup_age_thresholds[200-2] PASSED
+tests/ops/test_ops_freshness_prune.py::test_base_backup_age_thresholds[199-0] PASSED
+tests/ops/test_ops_freshness_prune.py::test_base_backup_age_thresholds[200-1] PASSED
+tests/ops/test_ops_freshness_prune.py::test_base_backup_age_thresholds[379-1] PASSED
+tests/ops/test_ops_freshness_prune.py::test_base_backup_age_thresholds[380-2] PASSED
+tests/ops/test_ops_freshness_prune.py::test_wal_age_is_the_rpo_signal[14-0] PASSED
+tests/ops/test_ops_freshness_prune.py::test_wal_age_is_the_rpo_signal[15-1] PASSED
+tests/ops/test_ops_freshness_prune.py::test_wal_age_is_the_rpo_signal[29-1] PASSED
+tests/ops/test_ops_freshness_prune.py::test_wal_age_is_the_rpo_signal[30-2] PASSED
+tests/ops/test_ops_freshness_prune.py::test_nothing_at_all_is_critical PASSED
+tests/ops/test_ops_freshness_prune.py::test_a_missing_or_invalid_manifest_is_critical[missing] PASSED
+tests/ops/test_ops_freshness_prune.py::test_a_missing_or_invalid_manifest_is_critical[invalid] PASSED
+tests/ops/test_ops_freshness_prune.py::test_a_gap_in_the_wal_sequence_is_critical_and_counted PASSED
+tests/ops/test_ops_freshness_prune.py::test_a_new_timeline_is_not_reported_as_a_gap PASSED
+tests/ops/test_ops_freshness_prune.py::test_wal_gap_detection_crosses_a_log_file_boundary PASSED
+tests/ops/test_ops_freshness_prune.py::test_dry_run_selects_per_policy_and_deletes_nothing PASSED
+tests/ops/test_ops_freshness_prune.py::test_apply_deletes_exactly_the_complement_with_their_manifests PASSED
+tests/ops/test_ops_freshness_prune.py::test_the_newest_n_are_never_deleted_whatever_the_policy PASSED
+tests/ops/test_ops_freshness_prune.py::test_prune_refuses_when_the_newest_backup_is_not_fresh PASSED
+tests/ops/test_ops_freshness_prune.py::test_wal_is_deleted_only_below_the_oldest_retained_base_start PASSED
+tests/ops/test_ops_freshness_prune.py::test_no_base_backup_means_no_wal_is_deleted PASSED
+tests/ops/test_ops_freshness_prune.py::test_gaps_only_needs_just_the_wal_directory_and_reports_the_gap PASSED
+tests/ops/test_ops_freshness_prune.py::test_gaps_only_without_a_wal_directory_is_an_error PASSED
+======================== 28 passed, 1 warning in 18.26s ========================
