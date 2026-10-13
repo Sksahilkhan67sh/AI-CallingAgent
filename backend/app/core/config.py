@@ -207,7 +207,20 @@ class Settings(BaseSettings):
     # response size is attacker-influenced.
     dograh_transcript_max_bytes: int = 2_000_000
     dograh_transcript_max_lines: int = 5_000
+    # HF1 1.1: webhooks authenticate FIRST, then limit. This is the per-client-address cap on
+    # FAILED authentications (401 until over it, then 429); a request carrying a valid secret
+    # is never counted against it.
     webhook_rate_limit_per_minute: int = 120
+    # HF1 1.1: generous ceiling on requests per client address that DO carry a valid webhook
+    # secret (abuse backstop only). Default is well above admission CPS x 60 (20 x 60 = 1200).
+    webhook_valid_ceiling_per_minute: int = 6000
+    # HF1 1.1: login counts FAILED attempts only, per (client address, username) -- limit above
+    # (`login_rate_limit_per_minute`) -- and per client address across usernames (this ceiling,
+    # higher so a shared office address is not blocked by one mistyped password).
+    login_ip_failure_ceiling_per_minute: int = 50
+    # HF1 1.2: comma-separated CIDRs of reverse proxies whose X-Forwarded-For may be trusted.
+    # Empty (default) = use the socket peer address and ignore the header entirely.
+    trusted_proxies: str = ""
 
     # --- Post-call intelligence (Checkpoint 06) ---
     # "mock" is the only supported value until real credentials exist,
@@ -432,6 +445,14 @@ class Settings(BaseSettings):
 
         if self.environment not in _ENVIRONMENTS:
             problems.append(f"ENVIRONMENT must be one of {sorted(_ENVIRONMENTS)}")
+        # HF1 1.2: a malformed CIDR must stop the process, not silently trust nothing (or,
+        # worse, be half-parsed). Imported here to keep config free of an import cycle.
+        from app.core.client_address import parse_trusted_proxies
+
+        try:
+            parse_trusted_proxies(self.trusted_proxies)
+        except ValueError as exc:
+            problems.append(f"TRUSTED_PROXIES is invalid: {exc}")
         if self.calling_engine not in _CALLING_ENGINES:
             problems.append(f"CALLING_ENGINE must be one of {sorted(_CALLING_ENGINES)}")
         if self.dograh_trigger_mode not in _DOGRAH_TRIGGER_MODES:
@@ -466,6 +487,10 @@ class Settings(BaseSettings):
             "import_rate_limit_per_minute",
             "mutation_rate_limit_per_minute",
             "analysis_rate_limit_per_minute",
+            "webhook_rate_limit_per_minute",
+            "webhook_valid_ceiling_per_minute",
+            "login_rate_limit_per_minute",
+            "login_ip_failure_ceiling_per_minute",
             "max_request_body_bytes",
             "max_import_body_bytes",
             "dograh_transcript_max_bytes",
