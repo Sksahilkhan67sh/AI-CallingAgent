@@ -19,12 +19,8 @@ def get_health() -> dict:
     merely because a downstream dependency (Postgres, Redis) is
     temporarily unavailable. An orchestrator restarting the process
     over a transient DB blip would make an outage worse, not better."""
-    settings = get_settings()
-    return {
-        "status": "ok",
-        "service": settings.app_name,
-        "environment": settings.environment,
-    }
+    # HF1 1.4: no environment name (it tells a scanner which deployment this is).
+    return {"status": "ok", "service": get_settings().app_name}
 
 
 @router.get("/ready")
