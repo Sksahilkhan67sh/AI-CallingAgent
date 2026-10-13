@@ -11,9 +11,10 @@ import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.client_address import client_address
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.rate_limit import rate_limit_dependency
+from app.core.rate_limit import enforce_valid_webhook_ceiling, throttle_failed_webhook_auth
 from app.schemas.dograh_webhook import DograhWebhookPayload
 from app.services.security_audit import record_security_event
 from app.services.telephony.dograh_webhook_service import (
@@ -24,15 +25,10 @@ from app.services.telephony.dograh_webhook_service import (
 router = APIRouter(prefix="/api/v1/webhooks/dograh", tags=["Dograh Webhook"])
 
 
-def _webhook_rate_limit():
-    return rate_limit_dependency(
-        limit=lambda: get_settings().webhook_rate_limit_per_minute,
-        window_seconds=60,
-        key_prefix="dograh_webhook",
-    )
+_RATE_KEY = "dograh_webhook"
 
 
-def _verify_secret(
+def _authenticate_then_limit(
     request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -41,7 +37,11 @@ def _verify_secret(
     """Dograh's Webhook node supports BEARER_TOKEN or API_KEY auth on
     the outgoing request (its own docs) -- either is accepted here so
     the person configuring the workflow can pick whichever fits their
-    Dograh credential store."""
+    Dograh credential store.
+
+    HF1 1.1 -- authenticate FIRST, then limit: a valid secret is only ever subject to the
+    generous valid-request ceiling; a failed authentication is counted per client address and
+    answered 401 (429 only once that address is over its failure limit)."""
     # CP10: declared as a route dependency so it runs BEFORE the body is
     # validated (an unauthenticated caller must not get schema feedback or
     # reach any processing), and compared as bytes so a non-ASCII credential
@@ -51,11 +51,12 @@ def _verify_secret(
     if authorization and authorization.lower().startswith("bearer "):
         bearer_token = authorization.split(" ", 1)[1].strip()
 
-    if bearer_token and secrets.compare_digest(bearer_token.encode(), expected):
+    if (bearer_token and secrets.compare_digest(bearer_token.encode(), expected)) or (
+        x_api_key and secrets.compare_digest(x_api_key.encode(), expected)
+    ):
+        enforce_valid_webhook_ceiling(db, request, key_prefix=_RATE_KEY)
         return
-    if x_api_key and secrets.compare_digest(x_api_key.encode(), expected):
-        return
-    source_ip = request.client.host if request.client else "unknown"
+    source_ip = client_address(request)
     record_security_event(
         db,
         action="webhook.auth_failed",
@@ -70,14 +71,13 @@ def _verify_secret(
         throttle_key=f"dograh:{source_ip}",
         commit=True,
     )
+    throttle_failed_webhook_auth(request, key_prefix=_RATE_KEY)  # 429 only when over the limit
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Dograh webhook credential"
     )
 
 
-@router.post(
-    "/call-completed", dependencies=[Depends(_webhook_rate_limit()), Depends(_verify_secret)]
-)
+@router.post("/call-completed", dependencies=[Depends(_authenticate_then_limit)])
 def dograh_call_completed(
     payload: DograhWebhookPayload,
     db: Session = Depends(get_db),
