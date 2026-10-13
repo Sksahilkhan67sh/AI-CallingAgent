@@ -1,0 +1,162 @@
+CP15B executed drills -- SANDBOX MEASUREMENTS (not production figures)
+date_utc: 2026-10-13T06:24:04Z
+host: sandbox container; PostgreSQL 16.15, age 1.1.1, bash , shellcheck 0.9.0
+command: DRILL_PYTHON=<venv python> ops/backup/drill.sh all
+data: synthetic only; throwaway age keys generated inside the drill and deleted on exit; throwaway cluster on a private socket
+------------------------------------------------------------------------------------------
+cluster: PostgreSQL 16.15 on a private socket, port 55432 (sandbox)
+
+=== DRILL A ===
+  $ /home/claude/repo/ops/backup/pg_logical_backup.sh
+SUMMARY script=pg_logical_backup status=ok artifact=logical-20261013T062406Z.dump.age size=44793 sha256=4f8cc3bd8d9046461bdaa4df7277b40305c00b5a3485c5f91a948008242f3c7c seconds=1
+  $ /home/claude/repo/ops/backup/restore_logical.sh --artifact /tmp/cp15b-drill.3vrPxe/dest/logical/logical-20261013T062406Z.dump.age --target-db drill_restored --identity /tmp/cp15b-drill.3vrPxe/keys/a.key --tolerance-pct 0
+SUMMARY script=restore_logical status=ok target_db=drill_restored alembic=c15a1b2c3d4e seconds=0 NEXT=post-restore-procedure
+  ok:   per-table row counts and row checksums identical
+        agent_config:0:d41d8cd98f00b204e9800998ecf8427e
+        alembic_version:1:5820e038597d177b35dab6d3b2ad6bfc
+        analysis_budget_day:0:d41d8cd98f00b204e9800998ecf8427e
+        audit_log:1:e34fbe0f426da65c390ab06c9dd35b45
+        call_analysis:2:0b88e790302c202ca389f0b4098dfd97
+        call_attempt:2:b057d94a7194b1fb2d8a7c4fac7e8d65
+        call_event:0:d41d8cd98f00b204e9800998ecf8427e
+        campaign:2:94041b4e395e0c57f69107c8c4d46a2b
+        contact:6:0dfadb6a85c2081020f57c23f117ac14
+        conversation_message:3:33f8bda01be853969c3efc6ade3562f9
+        conversation_session:1:e8f386315e48f76f50e76f4b42d7659b
+        erasure_log:0:d41d8cd98f00b204e9800998ecf8427e
+        processed_event:0:d41d8cd98f00b204e9800998ecf8427e
+        retention_run:0:d41d8cd98f00b204e9800998ecf8427e
+        retry_policy:0:d41d8cd98f00b204e9800998ecf8427e
+        suppression:2:546804ae4f87e1db46cf05ab8baa6979
+        working_memory_snapshot:0:d41d8cd98f00b204e9800998ecf8427e
+  $ alembic current / check (restored database)
+c15a1b2c3d4e (head)
+  ok:   alembic check clean
+RESULT drill=A status=PASS seconds=3
+
+=== DRILL B ===
+  $ /home/claude/repo/ops/backup/pg_base_backup.sh
+SUMMARY script=pg_base_backup status=ok artifact=base-20261013T062408Z.tar.gz.age size=5379514 start_wal=000000010000000000000002 sha256=b60c822ef9a8c8cbe60e092c6fef2714f0140f2459e9471dec9ceb17c431c0e2 seconds=3
+  $ /home/claude/repo/ops/backup/restore_pitr.sh --base /tmp/cp15b-drill.3vrPxe/dest/base/base-20261013T062408Z.tar.gz.age --data-dir /tmp/cp15b-drill.3vrPxe/pitr --wal-dir /tmp/cp15b-drill.3vrPxe/dest/wal --identity /tmp/cp15b-drill.3vrPxe/keys/a.key --port 55434 --target-name t1
+SUMMARY script=restore_pitr status=ok data_dir=/tmp/cp15b-drill.3vrPxe/pitr socket_dir=/tmp/cp15b-drill.3vrPxe/pitr/.s port=55434 timeline=2 in_recovery=false stop_point="[18672] LOG:  recovery stopping at restore point "t1", time 2026-10-13 06:24:11.905867+00" seconds=2 NEXT=post-restore-procedure
+  ok:   t1 row present
+  ok:   t2 row ABSENT (recovered to t1)
+  ok:   pg_is_in_recovery() = false
+  ok:   timeline advanced to 2
+        2026-10-13 06:24:15.859 UTC [18672] LOG:  recovery stopping at restore point "t1", time 2026-10-13 06:24:11.905867+00
+RESULT drill=B status=PASS seconds=9
+
+=== DRILL C ===
+  ok:   right key: decrypt + pg_restore --list
+  ok:   wrong key cannot decrypt (failed as required)
+  ok:   logical --restore-test: scratch database restored, row counts + alembic revision match the manifest
+  ok:   base --restore-test: backup started on a private port, row counts match the manifest
+  ok:   the scratch database was dropped afterwards
+  ok:   every artifact/WAL segment is age-encrypted and mode 0600 (12 files)
+  ok:   no plaintext dump / tar / partial file left in the destination
+  ok:   staging directory is empty (no decrypted material left)
+RESULT drill=C status=PASS seconds=3
+
+=== DRILL D ===
+  ok:   logical: one flipped byte fails the checksum (failed as required)
+  ok:   logical: with the checksum bypassed, decryption/structure check still fails (failed as required)
+  ok:   base: one flipped byte fails the checksum (failed as required)
+  ok:   base: with the checksum bypassed, decryption/structure check still fails (failed as required)
+RESULT drill=D status=PASS seconds=4
+
+=== DRILL E ===
+  $ /home/claude/repo/ops/backup/restore_pitr.sh --base /tmp/cp15b-drill.3vrPxe/dest/base/base-20261013T062424Z.tar.gz.age --data-dir /tmp/cp15b-drill.3vrPxe/pitr-latest --wal-dir /tmp/cp15b-drill.3vrPxe/dest/wal --identity /tmp/cp15b-drill.3vrPxe/keys/a.key --port 55436 --target-latest
+SUMMARY script=restore_pitr status=ok data_dir=/tmp/cp15b-drill.3vrPxe/pitr-latest socket_dir=/tmp/cp15b-drill.3vrPxe/pitr-latest/.s port=55436 timeline=2 in_recovery=false stop_point="n/a" seconds=2 NEXT=post-restore-procedure
+  ok:   --target-latest recovered everything archived (e1, e2, e3 present)
+  deleting one archived segment (the second newest): 000000010000000000000007
+  ok:   --target-latest refuses while the archive has a gap (failed as required)
+  ok:   nothing was extracted before the refusal
+  ok:   PITR past the lost segment fails loudly (failed as required)
+        2026-10-13 06:24:36.246 UTC [20035] FATAL:  recovery ended before configured recovery target was reached
+        {"status":"critical","exit_code":2,"checked_utc":"2026-10-13T06:24:36Z","logical":{"status":"ok","age_seconds":30,"artifact":"logical-20261013T062406Z.dump.age"},"base":{"status":"ok","age_seconds":9,"artifact":"base-20261013T062424Z.tar.gz.age"},"wal":{"status":"ok","age_seconds":6},"wal_gaps":{"status":"critical","missing_segments":1}}
+  ok:   check_backup_freshness.sh exits 2 and reports the WAL gap
+RESULT drill=E status=PASS seconds=12
+
+=== DRILL G ===
+  ok:   restored database has only the 2 old DNC rows (2 newer entries are lost)
+  $ app drill_g_restored /home/claude/venv/bin/python -m app.scripts.reconcile_suppressions --copy /tmp/cp15b-drill.3vrPxe/dnc/dnc-20261013T062440Z.csv.age --identity /tmp/cp15b-drill.3vrPxe/keys/a.key
+reconcile_suppressions[dnc] DRY RUN: {'copy_rows': 4, 'already_present': 2, 'skipped_removed': 0, 'would_add': 2, 'added': 0} | db_rows=2 db_newest=2026-10-13T06:24:38.033635+00:00 copy_newest=2026-10-13T06:24:39.938352+00:00
+  ok:   dry run changed nothing
+  $ app drill_g_restored /home/claude/venv/bin/python -m app.scripts.reconcile_suppressions --copy /tmp/cp15b-drill.3vrPxe/dnc/dnc-20261013T062440Z.csv.age --identity /tmp/cp15b-drill.3vrPxe/keys/a.key --apply
+reconcile_suppressions[dnc] APPLIED: {'copy_rows': 4, 'already_present': 2, 'skipped_removed': 0, 'would_add': 2, 'added': 2} | db_rows=2 db_newest=2026-10-13T06:24:38.033635+00:00 copy_newest=2026-10-13T06:24:39.938352+00:00
+  ok:   both lost numbers are back (4 rows)
+  ok:   the original rows were not modified or deleted
+  ok:   one counts-only audit event
+RESULT drill=G status=PASS seconds=6
+
+=== DRILL H ===
+  ok:   the erased person is BACK in the older backup (contact + number present)
+  ok:   the erasure_log entry is lost too (it lived in the same database)
+  $ app drill_h_restored /home/claude/venv/bin/python -m app.scripts.reconcile_suppressions --kind erasure --copy /tmp/cp15b-drill.3vrPxe/dnc/erasure-20261013T062447Z.csv.age --identity /tmp/cp15b-drill.3vrPxe/keys/a.key --apply
+reconcile_suppressions[erasure] APPLIED: {'copy_rows': 1, 'already_present': 0, 'would_add': 1, 'added': 1} | db_rows=0 db_newest=None copy_newest=2026-10-13T06:24:45.417992+00:00
+  $ app drill_h_restored /home/claude/venv/bin/python -m app.scripts.reapply_erasures
+reapply_erasures DRY RUN: ReapplyReport(fingerprints=1, contacts_scanned=6, contacts_matched=1, contacts_scrubbed=1, skipped_legal_hold=0, erased_missing_from_dnc=0, applied=False)
+  $ app drill_h_restored /home/claude/venv/bin/python -m app.scripts.reapply_erasures --apply
+reapply_erasures APPLIED: ReapplyReport(fingerprints=1, contacts_scanned=6, contacts_matched=1, contacts_scrubbed=1, skipped_legal_hold=0, erased_missing_from_dnc=0, applied=True)
+  ok:   number scrubbed again
+  ok:   contact carries a purge placeholder
+  ok:   transcript turns deleted
+  ok:   analysis free text cleared
+  ok:   the erased number is on the DNC list again
+RESULT drill=H status=PASS seconds=7
+
+=== DRILL I ===
+  restored revision: a83d13f0c415
+  $ alembic_in drill_i_restored upgrade head
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade a83d13f0c415 -> c15a1b2c3d4e, cp15a: data lifecycle -- legal hold, purge markers, erasure_log, retention_run, scan indexes
+  ok:   alembic check clean after upgrading the restored old backup
+  ok:   old row survived the forward migration
+RESULT drill=I status=PASS seconds=3
+
+=== DRILL J ===
+        Post-restore report (2026-10-13T06:24:52.678663+00:00) -- READ ONLY
+        
+        Newest data per table:
+          audit_log.created_at: 2026-10-13T06:24:06.377344+00:00
+          call_attempt.started_at: 2026-10-13T03:24:06.803112+00:00
+          call_analysis.updated_at: 2026-10-13T06:24:06.800706+00:00
+          contact.updated_at: 2026-10-13T06:24:06.800706+00:00
+          conversation_message.created_at: 2026-10-13T06:24:06.800706+00:00
+          erasure_log.requested_at: None
+          processed_event.received_at: None
+          retention_run.started_at: None
+          suppression.requested_at: 2026-10-13T06:24:06.377344+00:00
+        
+        Contacts in DIALING / RETRY_SCHEDULED: 2
+          under_1h: 2
+            788ef799-b676-49ed-a7c9-753c03da59d5 Dialing
+            63609423-1b50-4fbb-ab51-8a4edfb37b3a RetryScheduled
+          1h_to_24h: 0
+          1d_to_7d: 0
+          over_7d: 0
+        
+        Call attempts in INITIATED: 1
+          under_1h: 0
+          1h_to_24h: 1
+            7cd46fbe-9236-451e-804f-e5d0d4fac778 Initiated
+          1d_to_7d: 0
+          over_7d: 0
+        
+        Analyses in PROCESSING: 1
+          under_1h: 1
+            f865db3d-24f6-415b-8210-8b625133e151 processing
+          1h_to_24h: 0
+          1d_to_7d: 0
+          over_7d: 0
+        
+        erasure_log rows: 0
+        secret checks (compare with the values recorded at deploy): {'erasure_pepper': '609bd3455181', 'jwt_signing_key': '5fd5830b4485'}
+        
+        Nothing was changed. Decide per bucket whether to re-enqueue or close; see the runbook.
+  ok:   no table changed (row counts + checksums identical before/after)
+  ok:   the seeded stranded states are listed
+  ok:   no phone number in the report
+RESULT drill=J status=PASS seconds=0
+exit_code=0

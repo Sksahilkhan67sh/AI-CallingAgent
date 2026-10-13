@@ -38,6 +38,22 @@ DEFERRED.
 | Backups (CP15B) | everything in Postgres | backup operators | backup retention | age out; erased people are re-scrubbed after a restore by `reapply_erasures` |
 | Recordings | **not stored.** Recording ingestion is BLOCKED (provider-side consent, decision 9) | n/a | n/a | n/a |
 
+## 2b. Backups (CP15B)
+
+Backups contain **everything** in Postgres, i.e. every row of every table above, for as long as the
+backup exists. Treat a backup as the most sensitive copy of the data.
+
+| Aspect | Value |
+|---|---|
+| Where PII lives | `logical/*.dump.age` (full dump), `base/*.tar.gz.age` (whole data directory), `wal/*.age` (every change), and the secondary copies `dnc-*.csv.age` (**phone numbers**: the DNC list) and `erasure-*.csv.age` (keyed fingerprints, no numbers) |
+| Encryption | `age`, asymmetric: the backup and database hosts hold **only public keys**; two offline custodians hold the private keys. Plaintext exists only transiently: a 0700 staging directory during a base backup, and on a restore host |
+| Retention | proposed 7 daily / 4 weekly / 12 monthly logical + base backups; WAL as long as the oldest retained base backup needs it; DNC/erasure copies per the storage lifecycle (>= 7 days). OWNER DECISION |
+| Who can read | only a holder of a custodian private key. The backup writer can write but not read or delete |
+| Deletion method | `prune_backups.sh --apply` by a **separate** deleting identity; there is no per-person deletion inside a backup |
+| Erasure and retention | **backups are not edited when a person is erased or a retention period passes.** The person stays in older backups until those expire. After any restore `reconcile_suppressions --kind erasure` + `reapply_erasures` scrub them again. The maximum backup age is a **LEGAL DECISION** (see `docs/runbooks/BACKUP-AND-RESTORE.md` section 12). DOCUMENTED LIMITATION |
+| Redis, logs | not backed up |
+| Dograh-side data | outside this repository; back up and delete separately (owner task, DEFERRED) |
+
 ## 3. Column registry
 
 | Table | Column | Classification | Retention class | Governing setting |
