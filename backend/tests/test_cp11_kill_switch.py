@@ -10,7 +10,6 @@ import threading
 from pathlib import Path
 
 import pytest
-import redis as redis_lib
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -106,15 +105,15 @@ def _audit_actions(db_session):
 
 
 @pytest.fixture
-def dead_redis(monkeypatch):
-    """Make the kill switch's own Redis client unreachable (closed port)."""
-    bad = redis_lib.Redis.from_url(
-        "redis://127.0.0.1:1/0",
-        decode_responses=True,
-        socket_timeout=0.2,
-        socket_connect_timeout=0.2,
-    )
-    monkeypatch.setattr(kill_switch, "_client", lambda: bad)
+def unreadable_store(monkeypatch):
+    """HF1 1.3: the switch's store is PostgreSQL now (it was a Redis key), so "the switch cannot
+    be read" means the database cannot be reached. Same fail-closed assertions as before."""
+    from sqlalchemy.exc import OperationalError
+
+    def _boom():
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("app.services.outbound_control._open_session", _boom)
 
 
 @pytest.fixture
@@ -437,12 +436,12 @@ def test_only_the_gated_dial_path_can_place_a_call():
 # --- fail closed ---------------------------------------------------------------------
 
 
-def test_unreadable_switch_is_reported_as_blocked(dead_redis):
+def test_unreadable_switch_is_reported_as_blocked(unreadable_store):
     assert kill_switch.block_reason() == kill_switch.UNAVAILABLE
 
 
 def test_worker_fails_closed_when_switch_state_is_unreadable(
-    db_session, redis_client, provider, dead_redis
+    db_session, redis_client, provider, unreadable_store
 ):
     campaign, contact = _setup(db_session)
     _enqueue(db_session, redis_client, campaign, contact)
@@ -451,14 +450,14 @@ def test_worker_fails_closed_when_switch_state_is_unreadable(
     assert (_stream_len(redis_client), _pending(redis_client)) == (1, 0)
 
 
-def test_enqueue_fails_closed_with_503(client, db_session, dead_redis):
+def test_enqueue_fails_closed_with_503(client, db_session, unreadable_store):
     campaign, _ = _setup(db_session)
     response = client.post(f"/api/v1/campaigns/{campaign.id}/enqueue")
     assert response.status_code == 503
     assert "redis" not in response.text.lower()
 
 
-def test_admin_api_reports_503_not_500_when_redis_is_down(client, dead_redis):
+def test_admin_api_reports_503_not_500_when_redis_is_down(client, unreadable_store):
     assert client.get("/api/v1/admin/kill-switch").status_code == 503
     assert client.post("/api/v1/admin/kill-switch").status_code == 503
     assert client.delete("/api/v1/admin/kill-switch").status_code == 503
@@ -487,7 +486,7 @@ def test_env_backstop_blocks_without_any_redis_flag(static_backstop):
     assert kill_switch.block_reason() == kill_switch.ENABLED
 
 
-def test_env_backstop_still_blocks_when_redis_is_down(static_backstop, dead_redis):
+def test_env_backstop_still_blocks_when_redis_is_down(static_backstop, unreadable_store):
     # Reported as ENABLED (deliberately on), not merely "unreadable".
     assert kill_switch.block_reason() == kill_switch.ENABLED
 

@@ -78,7 +78,7 @@ def disable_kill_switch(
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> KillSwitchChangeResult:
     try:
-        changed = kill_switch.disable()
+        changed = kill_switch.disable(actor=principal.username)
     except kill_switch.KillSwitchUnavailableError as exc:
         raise ServiceUnavailableError(_UNAVAILABLE) from exc
     if changed:

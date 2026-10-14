@@ -201,6 +201,10 @@ class Settings(BaseSettings):
     # or restart). Changing it needs a process restart -- the runtime switch is
     # POST/DELETE /api/v1/admin/kill-switch.
     outbound_kill_switch: bool = False
+    # HF1 1.3: the durable kill switch / provider halt live in PostgreSQL. The dial gate may
+    # cache the rows in-process for this many seconds (0 = read every time). A change made in
+    # the same process is visible at once; one made by another process within this window.
+    kill_switch_cache_seconds: float = 2.0
 
     # CP11: hard cap on a fetched transcript body (decoded bytes) and on how many
     # lines of it are stored. The URL is supplied by the webhook body, so the
@@ -462,6 +466,8 @@ class Settings(BaseSettings):
                 "DOGRAH_CONNECT_TIMEOUT_SECONDS and DOGRAH_READ_TIMEOUT_SECONDS must be > 0"
             )
 
+        if self.kill_switch_cache_seconds < 0:
+            problems.append("KILL_SWITCH_CACHE_SECONDS must be >= 0")
         if self.dograh_retry_after_max_seconds <= 0:
             problems.append("DOGRAH_RETRY_AFTER_MAX_SECONDS must be > 0")
         if self.dograh_provider_error_max_retries < 0:

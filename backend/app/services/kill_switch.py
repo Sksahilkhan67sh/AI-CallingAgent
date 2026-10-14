@@ -1,60 +1,45 @@
-"""CP11 -- global outbound kill switch.
+"""CP11 / HF1 -- global outbound kill switch.
 
 Purpose: immediately stop NEW outbound calls. It does not delete queued jobs
 (they stay pending in the stream and in PostgreSQL) and does not touch calls
 that are already in progress -- there is no safe termination mechanism in the
 project, so active calls follow the normal webhook-driven lifecycle.
 
-State lives in a single Redis key (hot state, read on every dial -- no cache, so
-propagation is one Redis round trip). Two rules make that safe:
+HF1 1.3: the switch is DURABLE. State lives in the `kill_switch` row of `outbound_control`
+(PostgreSQL); Redis is not consulted. (Before HF1 it was a single Redis key, so a Redis
+restart without persistence silently turned the switch OFF.) Dialing is blocked when ANY of:
 
-* FAIL CLOSED. If Redis cannot be read (down, timeout, protocol error) the
-  answer is "blocked", never "allowed". An unreadable switch is treated as ON.
-* A static backstop, `OUTBOUND_KILL_SWITCH=true`, is checked first and needs no
-  Redis at all. It covers the one thing a Redis flag cannot: Redis losing its
-  data (flush / restart without persistence) and silently turning the switch
-  OFF. Operators who need the switch to survive that should set the env var or
-  run Redis with AOF persistence.
+* the row is engaged,
+* the static backstop `OUTBOUND_KILL_SWITCH=true` is set (needs no database at all),
+* the state cannot be read -- FAIL CLOSED: an unreadable switch is treated as ON, with an
+  error log.
 
-Enable/disable are single atomic Redis commands (SET NX / DEL), so concurrent
-toggles produce exactly one state transition -- and therefore one audit event.
+A short in-process cache (`KILL_SWITCH_CACHE_SECONDS`, default 2 s) is allowed; a change made
+in this process is visible immediately, one made elsewhere within the window.
+
+Engage/release are single atomic statements, so concurrent toggles produce exactly one state
+transition -- and therefore one audit event.
 """
 
-import json
 import logging
-from datetime import UTC, datetime
-from functools import lru_cache
-from typing import cast
-
-import redis
 
 from app.core.config import get_settings
+from app.services import outbound_control
+from app.services.outbound_control import ControlUnavailableError
 
 logger = logging.getLogger(__name__)
 
-KEY = "outbound:kill_switch"
+KEY = outbound_control.KILL_SWITCH
 
 # Reason codes returned by `block_reason` (also logged / put in job outcomes).
 ENABLED = "kill_switch_enabled"
 UNAVAILABLE = "kill_switch_unavailable"
 
-# A hung Redis must not hang a dial worker or an API request: short, bounded I/O.
-_SOCKET_TIMEOUT_SECONDS = 1.0
-_MAX_REASON_LENGTH = 200
+_MAX_REASON_LENGTH = outbound_control.MAX_REASON_LENGTH
 
 
 class KillSwitchUnavailableError(Exception):
-    """The switch state could not be read or changed (Redis problem)."""
-
-
-@lru_cache
-def _client() -> redis.Redis:
-    return redis.Redis.from_url(
-        get_settings().redis_url,
-        decode_responses=True,
-        socket_timeout=_SOCKET_TIMEOUT_SECONDS,
-        socket_connect_timeout=_SOCKET_TIMEOUT_SECONDS,
-    )
+    """The switch state could not be read or changed (database problem)."""
 
 
 def block_reason() -> str | None:
@@ -63,23 +48,31 @@ def block_reason() -> str | None:
     if get_settings().outbound_kill_switch:
         return ENABLED
     try:
-        return ENABLED if _client().exists(KEY) else None
-    except redis.RedisError:
+        row = outbound_control.read_all().get(KEY)
+    except ControlUnavailableError:
         logger.error("kill_switch_unreadable_failing_closed")
         return UNAVAILABLE
+    return ENABLED if row is not None and row.engaged else None
 
 
 def get_state() -> dict[str, object]:
     """Current state for the admin API. Raises KillSwitchUnavailableError."""
     static = get_settings().outbound_kill_switch
     try:
-        raw = cast(str | None, _client().get(KEY))
-    except redis.RedisError as exc:
+        row = outbound_control.read_all(use_cache=False).get(KEY)
+    except ControlUnavailableError as exc:
         raise KillSwitchUnavailableError from exc
-    detail: dict[str, object] = json.loads(raw) if raw else {}
+    engaged = row is not None and row.engaged
+    detail: dict[str, object] = {}
+    if row is not None and engaged:
+        detail = {
+            "enabled_by": row.engaged_by,
+            "enabled_at": row.engaged_at.isoformat() if row.engaged_at else None,
+            "reason": row.reason,
+        }
     return {
-        "enabled": static or raw is not None,
-        "runtime_flag": raw is not None,
+        "enabled": static or engaged,
+        "runtime_flag": engaged,
         "static_env_flag": static,
         **detail,
     }
@@ -87,22 +80,15 @@ def get_state() -> dict[str, object]:
 
 def enable(actor: str, reason: str | None) -> bool:
     """Returns True only if THIS call turned the switch on (False: already on)."""
-    payload = json.dumps(
-        {
-            "enabled_by": actor,
-            "enabled_at": datetime.now(UTC).isoformat(),
-            "reason": (reason or "")[:_MAX_REASON_LENGTH] or None,
-        }
-    )
     try:
-        return bool(_client().set(KEY, payload, nx=True))
-    except redis.RedisError as exc:
+        return outbound_control.engage(KEY, actor=actor, reason=reason)
+    except ControlUnavailableError as exc:
         raise KillSwitchUnavailableError from exc
 
 
-def disable() -> bool:
+def disable(actor: str = "unknown") -> bool:
     """Returns True only if THIS call turned the switch off (False: already off)."""
     try:
-        return bool(_client().delete(KEY))
-    except redis.RedisError as exc:
+        return outbound_control.release(KEY, actor=actor)
+    except ControlUnavailableError as exc:
         raise KillSwitchUnavailableError from exc

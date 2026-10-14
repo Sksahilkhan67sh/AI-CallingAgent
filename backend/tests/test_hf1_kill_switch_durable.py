@@ -322,7 +322,8 @@ def test_only_an_admin_can_engage_or_release_and_both_are_audited(
 ):
     from sqlalchemy import select
 
-    assert operator_client.post("/api/v1/admin/kill-switch", json={"reason": "x"}).status_code == 403
+    denied = operator_client.post("/api/v1/admin/kill-switch", json={"reason": "x"})
+    assert denied.status_code == 403
     assert operator_client.delete("/api/v1/admin/kill-switch").status_code == 403
     assert _row() is None  # a rejected request changed nothing
 
