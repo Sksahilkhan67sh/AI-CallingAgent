@@ -218,3 +218,32 @@ def classify_trigger_error(exc: DograhApiError) -> TriggerFailure:
     if exc.category in _PERMANENT_CATEGORIES:
         return TriggerFailure(TriggerPolicy.PERMANENT, REASON_CONFIGURATION)
     return TriggerFailure(TriggerPolicy.TRANSIENT, REASON_PROVIDER_ERROR)
+
+
+# --- HF1 1.5: provider-CONFIGURATION errors ---------------------------------------------------
+#
+# classify_trigger_error() above is unchanged: every one of these statuses is still PERMANENT /
+# "provider_configuration_error" for alerting. This is an ADDITIVE question asked by the dialer:
+# is the problem the provider's configuration (our credential, trigger or quota) rather than this
+# contact or this request? If so the contact must not be burned. Deliberately conservative -- only
+# statuses whose meaning is unambiguous (see docs/CHECKPOINT-13-NOTES.md §4 and the HF1 notes):
+#
+#   401 / 403  bad key / wrong organisation        -> "authentication_error"
+#   404        trigger missing or inactive          -> "provider_rejected"
+#   402        quota / credit exhausted             -> "quota_exhausted"
+#
+# NOT classified here (stay per-contact; the systemic detector is their safety net): 400 (telephony
+# unconfigured OR "initiation failed" free text), 409 and 422 (share a row with "bad request"),
+# 408/429/5xx (retry policies already handle them).
+_CONFIGURATION_STATUSES: dict[int, str] = {
+    401: "authentication_error",
+    403: "authentication_error",
+    404: "provider_rejected",
+    402: "quota_exhausted",
+}
+
+
+def provider_configuration_category(exc: DograhApiError) -> str | None:
+    """A sanitized provider-halt category for a clear configuration error, else None."""
+    status = exc.status_code
+    return _CONFIGURATION_STATUSES.get(status) if status is not None else None

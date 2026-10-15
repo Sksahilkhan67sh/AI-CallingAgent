@@ -29,6 +29,7 @@ from app.models.enums import CallAttemptState, ContactStatus
 from app.services import kill_switch, outbound_control, outbound_gate
 from app.services.queue.dialer_worker import JobOutcome, process_claimed_job, process_one_job
 from app.services.queue.job import DialJob
+from app.services.queue.redis_queue import RedisStreamQueue
 from app.services.telephony.circuit_breaker import CircuitBreaker
 from app.services.telephony.dograh_client import (
     DograhApiError,
@@ -104,11 +105,28 @@ def _contacts(ids):
         return [s.get(Contact, i) for i in ids]
 
 
-def _audit_count(action: str) -> int:
+_AUDIT_BASELINE: dict[str, int] = {}
+
+
+def _raw_audit_count(action: str) -> int:
     with _Session() as s:
         return s.execute(
             select(func.count()).select_from(AuditLog).where(AuditLog.action == action)
         ).scalar_one()
+
+
+@pytest.fixture(autouse=True)
+def _audit_baseline():
+    """`provider_halt.engage` commits its audit event through its own session, so rows from
+    earlier tests persist; count only what THIS test wrote."""
+    _AUDIT_BASELINE.clear()
+    for action in ("provider_halt.engaged", "provider_halt.released"):
+        _AUDIT_BASELINE[action] = _raw_audit_count(action)
+    yield
+
+
+def _audit_count(action: str) -> int:
+    return _raw_audit_count(action) - _AUDIT_BASELINE.get(action, 0)
 
 
 def _halt():
@@ -236,7 +254,11 @@ def test_contacts_are_rebuildable_from_postgres_after_a_redis_wipe(
 
     response = client.post(f"/api/v1/campaigns/{campaign_id}/enqueue")
     assert response.status_code == 200 and response.json()["enqueued"] == 5
-    _pump(redis_client, provider, _queue(redis_client, "halt5b"), admission)
+    settings = get_settings()  # the enqueue API feeds the application's own stream
+    app_queue = RedisStreamQueue(
+        redis_client, settings.queue_stream_key, settings.queue_consumer_group
+    )
+    _pump(redis_client, provider, app_queue, admission)
 
     assert len(fake.run_ids) == 5
     assert all(len(_attempts(cid)) == 1 for cid in ids)  # the held attempt row was reused
@@ -452,7 +474,7 @@ def test_status_endpoint_shows_both_flags(client):
     assert halt["engaged_by"] == "system" and halt["engaged_at"] and halt["reason"]
 
 
-def test_only_an_admin_can_release_and_a_reason_is_mandatory(client, operator_client):
+def test_only_an_admin_can_release_and_a_reason_is_mandatory(client, operator_client, db_session):
     from app.services import provider_halt
 
     provider_halt.engage("authentication_error", "test")
@@ -470,15 +492,18 @@ def test_only_an_admin_can_release_and_a_reason_is_mandatory(client, operator_cl
     state = _halt()
     assert state["engaged"] is False and state["released_by"] == "test-admin"
 
-    with _Session() as s:
-        row = s.execute(
-            select(AuditLog).where(AuditLog.action == "provider_halt.released")
-        ).scalar_one()
-    assert row.actor == "test-admin" and row.event_metadata == {"reason": "key rotated, verified"}
+    rows = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "provider_halt.released")
+    ).scalars().all()
+    assert len(rows) == 1  # the route audits through the request session
+    assert rows[0].actor == "test-admin"
+    assert rows[0].event_metadata == {"reason": "key rotated, verified"}
 
     again = client.post(url, json={"reason": "again"})  # idempotent, no second audit event
     assert again.json()["changed"] is False
-    assert _audit_count("provider_halt.released") == 1
+    released = select(func.count()).select_from(AuditLog)
+    released = released.where(AuditLog.action == "provider_halt.released")
+    assert db_session.execute(released).scalar_one() == 1
 
 
 def test_releasing_the_halt_does_not_touch_the_kill_switch(client):

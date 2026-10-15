@@ -15,6 +15,7 @@ from app.api.routes.admin_contacts import router as admin_contacts_router
 from app.api.routes.admin_dashboard import router as admin_dashboard_router
 from app.api.routes.admin_data import router as admin_data_router
 from app.api.routes.admin_kill_switch import router as admin_kill_switch_router
+from app.api.routes.admin_provider_halt import router as admin_provider_halt_router
 from app.api.routes.admin_spend import router as admin_spend_router
 from app.api.routes.admin_suppressions import router as admin_suppressions_router
 from app.api.routes.call_analysis import router as call_analysis_router
@@ -128,6 +129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         admin_auth_router,
         admin_dashboard_router,
         admin_kill_switch_router,
+        admin_provider_halt_router,
         admin_suppressions_router,
         admin_data_router,
         admin_spend_router,

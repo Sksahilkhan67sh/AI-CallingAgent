@@ -15,6 +15,8 @@ dropped.
 import logging
 import time
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
@@ -36,7 +38,7 @@ from app.repositories.contact_repository import ContactRepository
 from app.repositories.suppression_repository import SuppressionRepository
 
 # kill_switch stays importable from here: tests and ops tooling patch it via this module.
-from app.services import kill_switch, outbound_gate  # noqa: F401
+from app.services import kill_switch, outbound_gate, provider_halt  # noqa: F401
 from app.services.audit_service import record_audit_event
 from app.services.calling_window import InvalidTimezoneError, NoDialableWindowError
 from app.services.eligibility_service import DialEligibilityService
@@ -60,6 +62,7 @@ from app.services.telephony.dograh_outcome import (
     TriggerFailure,
     TriggerPolicy,
     classify_trigger_error,
+    provider_configuration_category,
 )
 from app.services.telephony.dograh_reconciliation import (
     AMBIGUOUS_TRIGGER_EVENT,
@@ -97,6 +100,11 @@ class JobOutcome:
     # CP11: global kill switch is on (or unreadable -> fail closed). Left UNACKED so
     # the job stays queued and is re-driven once outbound is re-enabled.
     OUTBOUND_BLOCKED = "outbound_blocked"
+    # HF1 1.5: the provider rejected our CONFIGURATION (credential / trigger / quota), or the
+    # systemic detector tripped. The contact is restored (dialable, retry budget untouched), the
+    # attempt is recorded with a sanitized category, `provider_halt` is engaged, and the job is
+    # left UNACKED so it is re-driven once an admin releases the halt.
+    PROVIDER_HALTED = "provider_halted"
     # The pre-retry lookup could not establish whether the earlier ambiguous
     # trigger created a call. Fail closed: no dial, left UNACKED so a
     # redelivery re-checks instead of dialing blind.
@@ -193,6 +201,7 @@ _LEFT_UNACKED = frozenset(
         JobOutcome.IN_FLIGHT,
         JobOutcome.RECONCILE_DEFERRED,
         JobOutcome.OUTBOUND_BLOCKED,
+        JobOutcome.PROVIDER_HALTED,
         JobOutcome.BUDGET_BLOCKED,
         JobOutcome.CAMPAIGN_PAUSED_HELD,
         JobOutcome.WINDOW_HELD,
@@ -485,7 +494,16 @@ def _dial(
     if existing is not None and existing.provider_call_id is not None:
         logger.info("duplicate_delivery_ignored", extra={"job_id": job.job_id})
         return JobOutcome.ALREADY_PROCESSED
-    if existing is not None and is_dograh:
+    # HF1 1.5: an attempt that the provider-configuration hold recorded but never triggered is
+    # NOT an unresolved claim -- no call exists. It is reused (below, after the gate) so a job
+    # re-driven after the halt is released, or rebuilt from PostgreSQL after a Redis loss, dials
+    # the contact exactly once on the same attempt row.
+    held = (
+        existing
+        if existing is not None and is_dograh and _is_held_attempt(db, existing)
+        else None
+    )
+    if existing is not None and is_dograh and held is None:
         return _resolve_unresolved_dograh_claim(db, existing, contact, job)
 
     # CP12-B: a paused campaign is "not now", never "not eligible" -- NOT_ELIGIBLE is acked,
@@ -533,20 +551,27 @@ def _dial(
             reason
         ) else JobOutcome.OUTBOUND_BLOCKED
 
-    attempt, created = attempts.get_or_create(contact.id, job.attempt_number)
+    # What to restore if the provider-configuration hold has to undo this claim (HF1 1.5).
+    prior = _Prior(status=contact.status, attempt_count=contact.attempt_count)
 
-    if not created and (attempt.provider_call_id is not None or is_dograh):
-        # Lost a race with another delivery/worker between the
-        # idempotency check above and claiming here.
-        logger.info("duplicate_delivery_ignored", extra={"job_id": job.job_id})
-        return JobOutcome.ALREADY_PROCESSED
+    if held is not None:
+        attempt, created = held, True  # re-claimed: counts as an attempt again, row reused
+        _resume_held_attempt(db, held)
+    else:
+        attempt, created = attempts.get_or_create(contact.id, job.attempt_number)
+
+        if not created and (attempt.provider_call_id is not None or is_dograh):
+            # Lost a race with another delivery/worker between the
+            # idempotency check above and claiming here.
+            logger.info("duplicate_delivery_ignored", extra={"job_id": job.job_id})
+            return JobOutcome.ALREADY_PROCESSED
 
     if created:
         contact.attempt_count += 1
     contact.status = ContactStatus.DIALING
     db.flush()
 
-    outcome = _place_call(db, provider, circuit_breaker, contact, attempt, job)
+    outcome = _place_call(db, provider, circuit_breaker, contact, attempt, job, prior=prior)
     return outcome or JobOutcome.ADMITTED_AND_DIALED
 
 
@@ -885,6 +910,7 @@ def _place_call(
     contact: Contact,
     attempt: CallAttempt,
     job: DialJob,
+    prior: "_Prior | None" = None,
 ) -> str | None:
     from app.core.config import get_settings
 
@@ -895,7 +921,7 @@ def _place_call(
         # drive, so _start_conversation_safely is deliberately never
         # called on this path. The call's outcome arrives later, once,
         # via app/api/routes/dograh_webhook.py.
-        return _place_call_via_dograh(db, contact, attempt, job)
+        return _place_call_via_dograh(db, contact, attempt, job, prior)
 
     result = provider.create_outbound_call(
         to_number=contact.normalized_phone_number, idempotency_key=job.idempotency_key
@@ -935,6 +961,111 @@ def _place_call(
     return None
 
 
+HELD_EVENT_TYPE = "DOGRAH_PROVIDER_HALT_HELD"
+RESUMED_EVENT_TYPE = "DOGRAH_PROVIDER_HALT_RESUMED"
+
+
+@dataclass(frozen=True)
+class _Prior:
+    """The contact as it was just BEFORE `_dial` claimed it, so a provider-configuration hold can
+    put it back exactly (a first attempt is PENDING/0; a retry is whatever the recovery set)."""
+
+    status: ContactStatus
+    attempt_count: int
+
+
+def _latest_event_type(db: Session, attempt: CallAttempt) -> str | None:
+    return db.execute(
+        select(CallEvent.event_type)
+        .where(CallEvent.call_attempt_id == attempt.id)
+        .order_by(CallEvent.occurred_at.desc(), CallEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _is_held_attempt(db: Session, attempt: CallAttempt) -> bool:
+    """True only for an attempt the provider-configuration hold recorded and never triggered:
+    its LATEST event is the hold marker, it has no provider call and it ended as a failed connect.
+    (Any later event -- a resume, a real trigger failure -- makes it an ordinary attempt again.)"""
+    return (
+        attempt.provider_call_id is None
+        and attempt.state == CallAttemptState.FAILED_TO_CONNECT
+        and _latest_event_type(db, attempt) == HELD_EVENT_TYPE
+    )
+
+
+def _resume_held_attempt(db: Session, attempt: CallAttempt) -> None:
+    attempt.state = CallAttemptState.INITIATED
+    attempt.connection_failure_reason = None
+    attempt.ended_at = None
+    attempt.started_at = datetime.now(UTC)
+    db.add(
+        CallEvent(
+            call_attempt_id=attempt.id,
+            event_type=RESUMED_EVENT_TYPE,
+            payload={"note": "provider halt released; re-dialing on the same attempt"},
+        )
+    )
+    db.flush()
+
+
+def _hold_for_provider_halt(
+    db: Session,
+    attempt: CallAttempt,
+    contact: Contact,
+    prior: _Prior,
+    *,
+    category: str,
+    status_code: int | None,
+    log_extra: Mapping[str, object],
+    source_category: str | None = None,
+    count: int | None = None,
+) -> str:
+    """HF1 1.5: the provider's configuration (or the provider as a whole) is the problem, so
+    nothing about THIS contact is spent.
+
+    * the attempt is RECORDED with a sanitized category (never raw exception text or a body);
+    * the contact goes back exactly where it was and its retry budget is not consumed, so it is
+      dialable and rebuildable from PostgreSQL;
+    * `provider_halt` is engaged (first error wins; one audit event; no job is acked or lost);
+    * the job is left UNACKED (`PROVIDER_HALTED`) and is re-driven after an admin releases.
+
+    If the halt itself cannot be written (database down) the exception propagates: the worker
+    rolls back and the job stays pending -- it never carries on dialing without the stop.
+    """
+    attempt.provider = "dograh"
+    attempt.state = CallAttemptState.FAILED_TO_CONNECT
+    attempt.connection_failure_reason = NeverConnectedFailureReason.PROVIDER_ERROR
+    attempt.ended_at = datetime.now(UTC)
+    db.add(
+        CallEvent(
+            call_attempt_id=attempt.id,
+            event_type=HELD_EVENT_TYPE,
+            payload={"category": category, "status_code": status_code},
+        )
+    )
+    contact.status = prior.status
+    contact.attempt_count = prior.attempt_count
+    db.flush()
+
+    provider_halt.engage(
+        category,
+        provider_halt.reason_for(
+            category, status_code=status_code, count=count, source_category=source_category
+        ),
+        metadata={
+            "status_code": status_code,
+            "campaign_id": log_extra.get("campaign_id"),
+            "attempt_id": log_extra.get("attempt_id"),
+        },
+    )
+    logger.error(
+        "provider_halt_hold",
+        extra={**log_extra, "category": category, "status_code": status_code},
+    )
+    return JobOutcome.PROVIDER_HALTED
+
+
 def _trigger_event_type(failure: TriggerFailure) -> str:
     if failure.policy == TriggerPolicy.AMBIGUOUS:
         return AMBIGUOUS_TRIGGER_EVENT
@@ -942,7 +1073,11 @@ def _trigger_event_type(failure: TriggerFailure) -> str:
 
 
 def _place_call_via_dograh(
-    db: Session, contact: Contact, attempt: CallAttempt, job: DialJob
+    db: Session,
+    contact: Contact,
+    attempt: CallAttempt,
+    job: DialJob,
+    prior: "_Prior | None" = None,
 ) -> str | None:
     """Checkpoint 08/09: one HTTP call replaces both `create_outbound_call`
     and the conversation-start step above -- Dograh runs the entire
@@ -962,6 +1097,7 @@ def _place_call_via_dograh(
     call connected at all (see dograh_webhook_service.py's three-way
     classification).
     """
+    from app.core.config import get_settings
     from app.core.redis_client import get_redis
     from app.services.telephony.dograh_client import DograhApiError, DograhConfigurationError
     from app.services.telephony.factory import get_dograh_client
@@ -998,6 +1134,13 @@ def _place_call_via_dograh(
         # and handed to RecoveryManager's bounded policy. Not a provider-health
         # signal, so the circuit breaker is not touched.
         logger.error("dograh_not_configured", extra=log_extra)
+        if prior is not None:
+            # HF1 1.5: a missing key/trigger is the PROVIDER's configuration, not this contact's
+            # problem: do not burn the contact, halt dialing instead.
+            return _hold_for_provider_halt(
+                db, attempt, contact, prior, category=provider_halt.CONFIGURATION_ERROR,
+                status_code=None, log_extra=log_extra,
+            )
         _record_dograh_trigger_failure(
             db,
             attempt,
@@ -1009,6 +1152,18 @@ def _place_call_via_dograh(
         )
         return None
     except DograhApiError as exc:
+        config_category = provider_configuration_category(exc)
+        if config_category is not None and prior is not None:
+            # HF1 1.5: 401/403/404/402 -- our credential, trigger or quota. Nothing is wrong with
+            # THIS contact; burning it (and the next, and the next) is the defect. Hold + halt.
+            logger.error(
+                "provider_configuration_error_halting",
+                extra={**log_extra, "status_code": exc.status_code, "category": config_category},
+            )
+            return _hold_for_provider_halt(
+                db, attempt, contact, prior, category=config_category,
+                status_code=exc.status_code, log_extra=log_extra,
+            )
         failure = classify_trigger_error(exc)
         is_ambiguous = failure.policy == TriggerPolicy.AMBIGUOUS
         logger.warning(
@@ -1034,6 +1189,16 @@ def _place_call_via_dograh(
                 )
         elif failure.policy == TriggerPolicy.PERMANENT:
             logger.error("provider_configuration_error", extra=log_extra)
+            # HF1 1.5 safety net: N consecutive permanent failures with the same category across
+            # DIFFERENT contacts mean the provider is the problem even though no single status
+            # was clearly a configuration error. The contact that trips it is held, not burned.
+            streak = provider_halt.note_permanent_failure(exc.category.value, str(contact.id))
+            if prior is not None and streak >= get_settings().provider_halt_systemic_threshold:
+                return _hold_for_provider_halt(
+                    db, attempt, contact, prior, category=provider_halt.SYSTEMIC_FAILURE,
+                    status_code=exc.status_code, log_extra=log_extra,
+                    source_category=exc.category.value, count=streak,
+                )
         # Checkpoint 09 §1.3: an ambiguous outcome (the request may have
         # reached Dograh before the response was lost) is never retried
         # immediately. First ask Dograh's documented run listing whether a run
@@ -1066,6 +1231,7 @@ def _place_call_via_dograh(
         return None
 
     dograh_breaker.record_success()
+    provider_halt.note_trigger_accepted()
     attempt.provider = "dograh"
     attempt.provider_call_id = str(result.workflow_run_id)
     db.add(

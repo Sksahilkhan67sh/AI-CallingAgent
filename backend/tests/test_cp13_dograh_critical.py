@@ -33,7 +33,11 @@ from app.services.telephony.dograh_client import (
     DograhErrorCategory,
     parse_retry_after,
 )
-from app.services.telephony.dograh_outcome import TriggerPolicy, classify_trigger_error
+from app.services.telephony.dograh_outcome import (
+    TriggerPolicy,
+    classify_trigger_error,
+    provider_configuration_category,
+)
 from app.services.telephony.dograh_webhook_service import process_dograh_webhook
 from tests.test_failure_injection import (
     AMBIGUOUS,
@@ -334,9 +338,19 @@ def test_permanent_provider_faults_are_never_retried(fake, redis_client, provide
         attempt = s.execute(
             select(CallAttempt).where(CallAttempt.contact_id == contact.id)
         ).scalar_one()
-        assert contact.status == ContactStatus.COMPLETED_PARTIAL
         assert attempt.state == CallAttemptState.FAILED_TO_CONNECT
-        assert _audit(attempt.id, "dograh.provider_configuration_error") == 1
+        if (
+            isinstance(error, DograhConfigurationError)
+            or provider_configuration_category(error) is not None
+        ):
+            # HF1 1.5: a clear provider-CONFIGURATION error (401/402/403/404, unbuildable client)
+            # no longer makes the contact terminal: it stays dialable, with no retry budget used,
+            # and the provider halt engages instead of a per-contact audit event.
+            assert contact.status == ContactStatus.PENDING and contact.attempt_count == 0
+            assert _audit(attempt.id, "dograh.provider_configuration_error") == 0
+        else:
+            assert contact.status == ContactStatus.COMPLETED_PARTIAL
+            assert _audit(attempt.id, "dograh.provider_configuration_error") == 1
 
 
 def test_provider_error_budget_stops_retries_and_is_durable(

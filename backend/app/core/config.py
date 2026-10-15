@@ -205,6 +205,13 @@ class Settings(BaseSettings):
     # cache the rows in-process for this many seconds (0 = read every time). A change made in
     # the same process is visible at once; one made by another process within this window.
     kill_switch_cache_seconds: float = 2.0
+    # HF1 1.5: this many CONSECUTIVE permanent per-contact trigger failures sharing one category,
+    # across DIFFERENT contacts, mean the provider (not the contacts) is the problem: the
+    # `provider_halt` engages (category `systemic_failure`) and the contact that tripped it stays
+    # dialable. Any accepted trigger, or a different category, resets the streak.
+    provider_halt_systemic_threshold: int = 5
+    # How long a streak is remembered without a new failure (it is only a safety net).
+    provider_halt_streak_ttl_seconds: int = 3600
 
     # CP11: hard cap on a fetched transcript body (decoded bytes) and on how many
     # lines of it are stored. The URL is supplied by the webhook body, so the
@@ -468,6 +475,10 @@ class Settings(BaseSettings):
 
         if self.kill_switch_cache_seconds < 0:
             problems.append("KILL_SWITCH_CACHE_SECONDS must be >= 0")
+        if self.provider_halt_systemic_threshold < 1:
+            problems.append("PROVIDER_HALT_SYSTEMIC_THRESHOLD must be >= 1")
+        if self.provider_halt_streak_ttl_seconds < 1:
+            problems.append("PROVIDER_HALT_STREAK_TTL_SECONDS must be >= 1")
         if self.dograh_retry_after_max_seconds <= 0:
             problems.append("DOGRAH_RETRY_AFTER_MAX_SECONDS must be > 0")
         if self.dograh_provider_error_max_retries < 0:

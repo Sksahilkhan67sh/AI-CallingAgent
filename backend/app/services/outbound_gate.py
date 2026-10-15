@@ -10,12 +10,18 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.services import kill_switch, spend_cap
+from app.services import kill_switch, provider_halt, spend_cap
 
 
 def block_reason(db: Session, now: datetime | None = None) -> str | None:
-    # Kill switch first: it needs no database, and when it is on the budget is irrelevant.
-    return kill_switch.block_reason() or spend_cap.block_reason(db, now)
+    # Kill switch first (static env backstop, then the durable PostgreSQL row; an unreadable
+    # store fails closed), then the automatic provider halt (same table, same cache), then the
+    # budget. When a stop is on, the budget is irrelevant.
+    return (
+        kill_switch.block_reason()
+        or provider_halt.block_reason()
+        or spend_cap.block_reason(db, now)
+    )
 
 
 def is_budget_reason(reason: str) -> bool:
