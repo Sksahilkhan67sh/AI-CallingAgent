@@ -363,7 +363,7 @@ Tests: `pytest` · Lint: `ruff check .` · Types: `mypy app` · Migrations: `ale
 
 ```bash
 cd frontend
-npm install --legacy-peer-deps  # pre-existing vitest/@types/node peer conflict in the scaffold, see docs/CHECKPOINT-07-NOTES.md §17
+npm ci                          # Node 22; installs exactly what package-lock.json pins
 cp .env.example .env.local
 npm run dev
 # http://localhost:3000
