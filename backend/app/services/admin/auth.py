@@ -80,7 +80,12 @@ def create_access_token(principal: AdminPrincipal) -> tuple[str, int]:
 def decode_access_token(token: str) -> AdminPrincipal:
     settings = get_settings()
     try:
-        payload = jwt.decode(token, settings.jwt_signing_key, algorithms=[_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.jwt_signing_key,
+            algorithms=[_ALGORITHM],
+            options={"require": ["exp"]},  # a token that never expires is not a valid session
+        )
     except jwt.PyJWTError as exc:
         raise InvalidTokenError(str(exc)) from exc
 
