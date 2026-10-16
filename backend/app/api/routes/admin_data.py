@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import MUTATION_LIMIT
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.models.retention_run import RetentionRun
 from app.schemas.admin_data import (
     ErasureRequest,
@@ -35,7 +35,7 @@ _ADMIN = Depends(require_role("admin"))
 @router.post("/erasure", response_model=ErasureResponse, dependencies=[MUTATION_LIMIT])
 def erase_data(
     data: ErasureRequest,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> ErasureResponse:
     result = erasure.erase(
@@ -58,7 +58,7 @@ def erase_data(
 @router.get("/contacts/{contact_id}/export", dependencies=[MUTATION_LIMIT])
 def export_contact_data(
     contact_id: uuid.UUID,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> dict[str, Any]:
     return export.export_contact(db, contact_id=contact_id, actor=principal.username)
@@ -72,7 +72,7 @@ def export_contact_data(
 def set_campaign_legal_hold(
     campaign_id: uuid.UUID,
     data: LegalHoldRequest,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> LegalHoldResponse:
     changed = holds.set_campaign_hold(
@@ -90,7 +90,7 @@ def set_campaign_legal_hold(
 def set_contact_legal_hold(
     contact_id: uuid.UUID,
     data: LegalHoldRequest,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> LegalHoldResponse:
     changed = holds.set_contact_hold(
@@ -105,7 +105,7 @@ def set_contact_legal_hold(
     response_model=RetentionStatusResponse,
     dependencies=[Depends(require_admin)],
 )
-def retention_status(db: Session = Depends(get_db)) -> RetentionStatusResponse:
+def retention_status(db: Session = DB_SESSION) -> RetentionStatusResponse:
     last = db.execute(
         select(RetentionRun).order_by(RetentionRun.started_at.desc()).limit(1)
     ).scalar_one_or_none()

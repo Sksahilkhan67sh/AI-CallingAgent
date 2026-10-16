@@ -5,7 +5,7 @@ def test_health_returns_ok(client):
     body = response.json()
     assert body["status"] == "ok"
     assert "service" in body
-    assert "environment" in body
+    assert "environment" not in body  # HF1 1.4: the environment name is not exposed
 
 
 def test_readiness_returns_ready_when_dependencies_are_up(client):

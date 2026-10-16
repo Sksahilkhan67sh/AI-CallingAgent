@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import MUTATION_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.errors import ServiceUnavailableError
-from app.services import kill_switch
+from app.services import kill_switch, outbound_control, provider_halt
 from app.services.admin.auth import AdminPrincipal
 from app.services.audit_service import record_audit_event
 
@@ -34,10 +34,17 @@ class KillSwitchChangeResult(BaseModel):
 
 @router.get("", dependencies=[Depends(require_admin)])
 def get_kill_switch() -> dict[str, object]:
+    """Both stop flags: the operator's kill switch (top level, as always) and, since HF1 1.5,
+    the automatic `provider_halt` (reason, sanitized category, who, when). Read-only."""
     try:
-        return kill_switch.get_state()
-    except kill_switch.KillSwitchUnavailableError as exc:
+        state = kill_switch.get_state()
+        state["provider_halt"] = provider_halt.get_state()
+    except (
+        kill_switch.KillSwitchUnavailableError,
+        outbound_control.ControlUnavailableError,
+    ) as exc:
         raise ServiceUnavailableError(_UNAVAILABLE) from exc
+    return state
 
 
 @router.post(
@@ -47,7 +54,7 @@ def get_kill_switch() -> dict[str, object]:
 )
 def enable_kill_switch(
     data: KillSwitchEnableRequest | None = None,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> KillSwitchChangeResult:
     reason = data.reason if data else None
@@ -74,11 +81,11 @@ def enable_kill_switch(
     dependencies=[MUTATION_LIMIT],
 )
 def disable_kill_switch(
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> KillSwitchChangeResult:
     try:
-        changed = kill_switch.disable()
+        changed = kill_switch.disable(actor=principal.username)
     except kill_switch.KillSwitchUnavailableError as exc:
         raise ServiceUnavailableError(_UNAVAILABLE) from exc
     if changed:

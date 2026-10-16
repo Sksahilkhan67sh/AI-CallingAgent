@@ -247,6 +247,7 @@ control: each was disabled in turn and the tests had to fail.
 * No webhook signing / replay window (Dograh offers none).
 * Fixed-window limiter allows up to 2× the limit across a window boundary.
 * Per-IP limits are only as good as `request.client.host`; behind a proxy run uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy>`.
+  **Superseded by HF1 (docs/HARDENING-HF1-NOTES.md):** do not use `--proxy-headers`; set `TRUSTED_PROXIES` instead (the header is honored only from a trusted proxy, right-most untrusted entry).
 * The kill switch is not atomic with the outbound HTTP trigger (§11). A Redis flush/restart without persistence clears the runtime flag
   (use AOF, or the `OUTBOUND_KILL_SWITCH` env backstop).
 * Dial stream is trimmed approximately at ~200k entries (pre-existing); a very large frozen backlog could lose the oldest entries.

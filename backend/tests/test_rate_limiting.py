@@ -16,8 +16,11 @@ def test_login_is_rate_limited_after_threshold(client):
     assert response.status_code == 429
 
 
-def test_webhook_is_rate_limited_after_threshold(client):
-    limit = get_settings().webhook_rate_limit_per_minute
+def test_webhook_is_rate_limited_after_threshold(client, monkeypatch):
+    # HF1 1.1: a VALID secret is subject only to the valid-request ceiling (failed-auth
+    # counters use `webhook_rate_limit_per_minute`). Same assertion, driven by the new knob.
+    limit = 120
+    monkeypatch.setattr(get_settings(), "webhook_valid_ceiling_per_minute", limit)
     headers = {"Authorization": f"Bearer {get_settings().dograh_webhook_secret}"}
     import uuid
 
@@ -43,6 +46,11 @@ def test_rate_limiter_fails_open_on_redis_error(monkeypatch):
 
     class _BrokenRedis:
         def incr(self, key):
+            import redis
+
+            raise redis.RedisError("down")
+
+        def eval(self, *args):  # HF1 1.1: the limiter is now one atomic script
             import redis
 
             raise redis.RedisError("down")

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.errors import ServiceUnavailableError
 from app.services import spend_cap
 
@@ -34,7 +34,7 @@ class SpendStatus(BaseModel):
 
 
 @router.get("", response_model=SpendStatus, dependencies=[Depends(require_admin)])
-def get_spend(db: Session = Depends(get_db)) -> SpendStatus:
+def get_spend(db: Session = DB_SESSION) -> SpendStatus:
     settings = get_settings()
     try:
         status = spend_cap.compute_status(db)  # fresh, never the worker's cached value

@@ -1,8 +1,17 @@
 """Lightweight fixed-window rate limiter -- Checkpoint 09 §8.5, hardened in CP11.
 
 Redis-backed (rate limiting is an explicitly appropriate use of Redis, never
-permanent business state). Deliberately simple -- one INCR + conditional EXPIRE
-per window, no new dependency, no token/leaky-bucket abstraction.
+permanent business state). Deliberately simple -- one atomic Lua script (INCR plus a TTL
+that is set on creation and healed if ever missing) per window, no new dependency, no
+token/leaky-bucket abstraction. HF1 1.1: the counter is a single script, so a key can never
+exist without a TTL, whatever happens to the calling process.
+
+HF1 1.1 -- AUTHENTICATE FIRST, THEN LIMIT. The pre-authentication endpoints (the two webhooks
+and login) no longer count every request. They verify the credential first and count only
+what is hostile: FAILED authentications, in per-client-address counters. A caller that
+presents a valid secret is never throttled by anyone's failures (webhooks have only a
+generous ceiling as an abuse backstop); a correct login is blocked only by failures from
+its own client address.
 
 Redis-failure policy is chosen PER ENDPOINT (`fail_closed`):
 
@@ -18,14 +27,17 @@ Redis-failure policy is chosen PER ENDPOINT (`fail_closed`):
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 import redis
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.client_address import rate_limit_identity
+from app.core.config import get_settings
+from app.core.database import DB_SESSION
 from app.services.audit_service import record_audit_event
 
 logger = logging.getLogger(__name__)
@@ -46,6 +58,26 @@ class RateLimiterUnavailable(Exception):
     """Redis could not be reached and the caller asked to fail closed."""
 
 
+# One script = one atomic step on the Redis server: increment, and if the key is new (or has
+# somehow lost its TTL) give it one. Returns {count, seconds-left}.
+_ATOMIC_INCR = """
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+if count == 1 or ttl < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {count, ttl}
+"""
+
+_KEY_PREFIX = "ratelimit:"
+
+
+def _atomic_incr(redis_client: redis.Redis, redis_key: str, window_seconds: int) -> tuple[int, int]:
+    count, ttl = redis_client.eval(_ATOMIC_INCR, 1, redis_key, str(window_seconds))  # type: ignore[misc]
+    return int(count), int(ttl)
+
+
 def check_rate_limit(
     redis_client: redis.Redis,
     *,
@@ -58,25 +90,31 @@ def check_rate_limit(
     the current fixed window. On a Redis error: raises RateLimiterUnavailable if
     `fail_closed`, otherwise fails open and returns True ("degraded"). Returns
     False in the normal healthy case."""
-    redis_key = f"ratelimit:{key}"
     try:
-        count: int = redis_client.incr(redis_key)  # type: ignore[assignment]
-        if count == 1:
-            redis_client.expire(redis_key, window_seconds)
-        if count <= limit:
-            return False
-        # Over the limit. INCR and EXPIRE are two commands: a process dying between
-        # them would leave a key with no TTL -- a PERMANENT block on this caller.
-        # Heal it here (only the blocked path pays for the extra round trip).
-        ttl: int = redis_client.ttl(redis_key)  # type: ignore[assignment]
-        if ttl < 0:
-            redis_client.expire(redis_key, window_seconds)
-            ttl = window_seconds
+        count, ttl = _atomic_incr(redis_client, f"{_KEY_PREFIX}{key}", window_seconds)
     except redis.RedisError as exc:
         if fail_closed:
             raise RateLimiterUnavailable from exc
         return True
+    if count <= limit:
+        return False
     raise RateLimitExceeded(f"Rate limit exceeded for {key}", retry_after=max(ttl, 1))
+
+
+def record_failure(redis_client: redis.Redis, *, key: str, window_seconds: int) -> tuple[int, int]:
+    """Count one FAILED attempt against `key` (atomic, always with a TTL). Returns
+    (failures in this window, seconds left). Raises redis.RedisError."""
+    return _atomic_incr(redis_client, f"{_KEY_PREFIX}{key}", window_seconds)
+
+
+def failure_state(redis_client: redis.Redis, *, key: str) -> tuple[int, int]:
+    """(failures so far, seconds left) WITHOUT counting anything. Raises redis.RedisError."""
+    redis_key = f"{_KEY_PREFIX}{key}"
+    raw = redis_client.get(redis_key)
+    if raw is None:
+        return 0, 0
+    ttl = int(redis_client.ttl(redis_key))  # type: ignore[arg-type]
+    return int(raw), ttl  # type: ignore[arg-type]
 
 
 def _audit_degraded(db: Session, key_prefix: str) -> None:
@@ -102,12 +140,10 @@ def _audit_degraded(db: Session, key_prefix: str) -> None:
 
 
 def client_ip_identity(request: Request) -> str:
-    """Default identity before authentication (login, webhooks): the peer address.
-
-    `request.client.host`; behind a reverse proxy run uvicorn with
-    `--proxy-headers --forwarded-allow-ips=<proxy>` so that is the real client.
-    X-Forwarded-For is deliberately NOT parsed here -- it is caller-controlled."""
-    return f"ip:{request.client.host if request.client else 'unknown'}"
+    """Default identity before authentication: the client address from the ONE shared helper
+    (`app.core.client_address`) -- the socket peer, or the forwarded client only when the peer
+    is a configured trusted proxy. X-Forwarded-For is never trusted on its own."""
+    return rate_limit_identity(request)
 
 
 def rate_limit_dependency(
@@ -126,7 +162,7 @@ def rate_limit_dependency(
     `limit` may be a callable so it is read per request (settings stay tunable)."""
 
     def _dependency(
-        db: Session = Depends(get_db), bucket_owner: str = Depends(identity)
+        db: Session = DB_SESSION, bucket_owner: str = Depends(identity)
     ) -> None:
         from app.core.redis_client import get_redis
 
@@ -156,3 +192,104 @@ def rate_limit_dependency(
             _audit_degraded(db, key_prefix)
 
     return _dependency
+
+
+def _too_many(retry_after: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many requests. Please try again later.",
+        headers={"Retry-After": str(max(retry_after, 1))},
+    )
+
+
+# --- webhooks: verify the secret first, then limit --------------------------------------
+
+_WINDOW_SECONDS = 60
+
+
+def enforce_valid_webhook_ceiling(db: Session, request: Request, *, key_prefix: str) -> None:
+    """A request that carried the VALID secret. Only a generous per-address ceiling applies
+    (`webhook_valid_ceiling_per_minute`); failed-authentication counters are never consulted,
+    so an attacker flooding bad requests from this address cannot throttle the real caller.
+    Fails open (audited) if Redis is down: dropping a legitimate completion webhook would lose
+    a call result for good."""
+    from app.core.redis_client import get_redis
+
+    try:
+        degraded = check_rate_limit(
+            get_redis(),
+            key=f"{key_prefix}:{client_ip_identity(request)}",
+            limit=get_settings().webhook_valid_ceiling_per_minute,
+            window_seconds=_WINDOW_SECONDS,
+        )
+    except RateLimitExceeded as exc:
+        raise _too_many(exc.retry_after) from exc
+    if degraded:
+        logger.error("rate_limiter_unavailable_failing_open", extra={"endpoint": key_prefix})
+        _audit_degraded(db, key_prefix)
+
+
+def throttle_failed_webhook_auth(request: Request, *, key_prefix: str) -> None:
+    """A request that FAILED authentication. Counts it against this client address; the caller
+    answers 401 unless this raises 429 because the address is now over
+    `webhook_rate_limit_per_minute` failures in the window. Redis down -> fail open (the
+    caller still answers 401: authentication itself never fails open)."""
+    from app.core.redis_client import get_redis
+
+    identity = client_ip_identity(request)
+    try:
+        failures, ttl = record_failure(
+            get_redis(), key=f"{key_prefix}_authfail:{identity}", window_seconds=_WINDOW_SECONDS
+        )
+    except redis.RedisError:
+        logger.error("rate_limiter_unavailable_failing_open", extra={"endpoint": key_prefix})
+        return
+    if failures > get_settings().webhook_rate_limit_per_minute:
+        raise _too_many(ttl)
+
+
+# --- login: count FAILED attempts only ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FailureBucket:
+    key: str  # without the "ratelimit:" prefix
+    limit: int  # failures allowed per window; the next attempt is refused
+
+
+def enforce_failure_buckets(buckets: Sequence[FailureBucket], *, endpoint: str) -> None:
+    """Refuse the attempt (429) if ANY bucket already holds `limit` failures. Fails CLOSED
+    (503) when Redis cannot be read: an unthrottled login is a brute-force oracle, so even a
+    correct credential gets no token while the limiter is blind."""
+    from app.core.redis_client import get_redis
+
+    worst_ttl = 0
+    over = False
+    try:
+        client = get_redis()
+        for bucket in buckets:
+            failures, ttl = failure_state(client, key=bucket.key)
+            if failures >= bucket.limit:
+                over = True
+                worst_ttl = max(worst_ttl, ttl)
+    except redis.RedisError as exc:
+        logger.error("rate_limiter_unavailable_failing_closed", extra={"endpoint": endpoint})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable.",
+        ) from exc
+    if over:
+        raise _too_many(worst_ttl)
+
+
+def record_failure_buckets(buckets: Sequence[FailureBucket], *, endpoint: str) -> None:
+    """Count one failed attempt in every bucket. A Redis error here is logged, not raised: the
+    attempt has already failed, and the pre-check above is what fails closed."""
+    from app.core.redis_client import get_redis
+
+    try:
+        client = get_redis()
+        for bucket in buckets:
+            record_failure(client, key=bucket.key, window_seconds=_WINDOW_SECONDS)
+    except redis.RedisError:
+        logger.error("rate_limiter_record_failure_failed", extra={"endpoint": endpoint})

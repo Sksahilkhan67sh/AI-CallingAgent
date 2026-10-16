@@ -9,7 +9,7 @@ import logging
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.services.admin.auth import AdminPrincipal, InvalidTokenError, decode_access_token
 from app.services.security_audit import record_security_event
 
@@ -68,7 +68,7 @@ def require_role(role: str):
     def _dependency(
         request: Request,
         principal: AdminPrincipal = Depends(require_admin),
-        db: Session = Depends(get_db),
+        db: Session = DB_SESSION,
     ) -> AdminPrincipal:
         if principal.role != role:
             route = getattr(request.scope.get("route"), "path", "unknown")

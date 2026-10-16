@@ -1,15 +1,11 @@
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-# --legacy-peer-deps: pre-existing peer conflict in the scaffold
-# (vitest@^5 wants @types/node@^22, the scaffold pins @types/node@^20)
-# -- predates Checkpoint 07, documented in docs/CHECKPOINT-07-NOTES.md
-# §17 and the README. `npm ci` fails without this flag.
-RUN npm ci --legacy-peer-deps
+RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/.next ./.next

@@ -20,6 +20,7 @@ from app.services.telephony.dograh_client import (
     DograhErrorCategory,
     DograhTriggerResult,
 )
+from app.services.telephony.dograh_outcome import provider_configuration_category
 from tests.test_dograh_dialer_integration import (
     _admission,
     _queue,
@@ -106,18 +107,35 @@ def test_provider_failure_is_recorded_acked_counted_and_never_retriggered(
     )
 
     attempt = db_session.query(CallAttempt).filter_by(contact_id=contact.id).one()
-    assert outcome == JobOutcome.ADMITTED_AND_DIALED
+    # HF1 1.5: a clear provider-CONFIGURATION status (401/403/404/402) no longer burns the contact:
+    # it is recorded, the job is left UNACKED, and the provider halt engages. The breaker is not
+    # fed (the halt replaces it). Every other status keeps the original assertions below.
+    configuration = (
+        provider_configuration_category(DograhApiError(status, "boom", category=category))
+        is not None
+    )
+    assert outcome == (
+        JobOutcome.PROVIDER_HALTED if configuration else JobOutcome.ADMITTED_AND_DIALED
+    )
     assert attempt.state == CallAttemptState.FAILED_TO_CONNECT
     assert attempt.provider_call_id is None
     ambiguous = category in (C.AMBIGUOUS_REQUEST, C.TIMEOUT)
     events = _events(db_session, attempt)
+    recorded_type = (
+        "DOGRAH_PROVIDER_HALT_HELD"
+        if configuration
+        else "DOGRAH_TRIGGER_AMBIGUOUS" if ambiguous else "DOGRAH_TRIGGER_FAILED"
+    )
     assert ("DOGRAH_TRIGGER_AMBIGUOUS" in events) == ambiguous
-    assert ("DOGRAH_TRIGGER_FAILED" in events) == (not ambiguous)
-    recorded = events["DOGRAH_TRIGGER_AMBIGUOUS" if ambiguous else "DOGRAH_TRIGGER_FAILED"]
-    assert recorded.payload["category"] == category.value
+    assert ("DOGRAH_TRIGGER_FAILED" in events) == (not ambiguous and not configuration)
+    recorded = events[recorded_type]
+    if configuration:
+        assert recorded.payload["status_code"] == status
+    else:
+        assert recorded.payload["category"] == category.value
     assert "api" not in str(recorded.payload).lower() or "key" not in str(recorded.payload).lower()
-    assert _pending(redis_client) == 0  # acked only after the durable commit
-    assert redis_client.get("circuit:dograh:errors") == "1"  # counted against Dograh's breaker
+    assert _pending(redis_client) == (1 if configuration else 0)  # acked only after durable commit
+    assert redis_client.get("circuit:dograh:errors") == (None if configuration else "1")
 
     # The same job is delivered again (reclaim / duplicate): never a second trigger.
     _deliver(db_session, redis_client, provider, monkeypatch, campaign, contact, lambda: fake)
@@ -173,15 +191,17 @@ def test_configuration_error_is_audited_and_does_not_strand_the_contact(
 
     attempt = db_session.query(CallAttempt).filter_by(contact_id=contact.id).one()
     assert attempt.state == CallAttemptState.FAILED_TO_CONNECT
-    assert _events(db_session, attempt)["DOGRAH_CONFIGURATION_ERROR"].payload == {
+    # HF1 1.5: the missing configuration is recorded as a provider-halt hold (sanitized category),
+    # not as a per-contact failure handed to RecoveryManager.
+    assert _events(db_session, attempt)["DOGRAH_PROVIDER_HALT_HELD"].payload == {
         "status_code": None,
         "category": "configuration_error",
-        "reason_key": "provider_configuration_error",
     }
     db_session.refresh(contact)
-    assert contact.status != ContactStatus.DIALING  # handed to RecoveryManager, not stuck
+    assert contact.status != ContactStatus.DIALING  # restored (dialable), never stranded
+    assert contact.status == ContactStatus.PENDING and contact.attempt_count == 0
     assert redis_client.get("circuit:dograh:errors") is None  # not a provider-health signal
-    assert _pending(redis_client) == 0
+    assert _pending(redis_client) == 1  # HF1 1.5: held, not acked and lost
 
 
 def test_open_circuit_blocks_the_trigger_and_leaves_the_job_for_later(
