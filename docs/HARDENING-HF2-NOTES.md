@@ -96,7 +96,7 @@ FastAPI pin is consistent. Do NOT revert only the pin's code part: on FastAPI >=
 `Depends(get_db)` commits after the response (the drift guard fails in that case).
 
 ## 7. Existing tests changed
-None changed or removed. 28 added (3 pin/guard, 16 JWT/multipart, 8 gate, 1 of them skipped when
+None changed or removed. 27 added (3 pin/guard, 16 JWT/multipart, 8 gate, 1 of them skipped when
 `pip-audit` is absent).
 
 ## 8. Found, not fixed
