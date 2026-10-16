@@ -47,7 +47,7 @@ So on a runner without `age`, tests/ops drill tests skip silently. [ASSUMED] ubu
 
 ## Docker builds: BLOCKED
 `docker build ./backend` and `docker build ./frontend` not run: Docker is not installed in the sandbox and the sandbox network does not allow Docker registries.
-Approaches tried: 1) `which docker`; 2) checked apt package availability was not attempted because no daemon could run (no privileged container) [ASSUMED].
+Approach tried: `which docker` (not found). No second approach was attempted because no container daemon can run in this sandbox [ASSUMED].
 Facts only [READ]: backend/Dockerfile:1 `FROM python:3.11-slim`; frontend/Dockerfile:1 and :8 `FROM node:22-slim`.
 Frontend (npm ci/build/test) was not run in P0-3 either: not in the task list.
 HUMAN-TODO: owner runs both `docker build` commands locally.
