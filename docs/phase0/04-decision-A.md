@@ -1,6 +1,6 @@
 # P0-4 Decision A: Dograh-only vs native providers
 
-Labels: [READ] = read in code/docs (file:line), [RAN] = command executed. Section 1 contains no [ASSUMED] items.
+Labels: [READ] = read in code/docs (file:line), [RAN] = command executed. Section 1 contains only facts that were read or run.
 Paths are relative to the repo root.
 
 ## 1. Facts
@@ -24,7 +24,7 @@ Paths are relative to the repo root.
 | `backend/app/models/agent_config.py` | 33 | read only by `ai/conversation/start.py:13,36` |
 | `backend/app/models/working_memory_snapshot.py` | 59 | written by the orchestrator; see 1.2a |
 | `backend/alembic/versions/4d189edbc3f3_add_agent_config_and_working_memory_.py` | 69 | migration creating both tables |
-| Total of the five code rows above (`cat ... | wc -l`) | **1615** | |
+| Total of the four code rows above (ai, mock_provider, agent_config, working_memory_snapshot; migration excluded) (`cat ... | wc -l`) | **1615** | |
 
 Native-only tests [RAN `wc -l`]: `tests/ai_helpers.py` + 8 files `tests/test_ai_*.py` = **1042 lines** (9 files);
 `tests/test_provider.py` 73 lines tests `MockTelephonyProvider` (`test_provider.py:6-7`).
@@ -51,7 +51,7 @@ Dialer branches on the engine at `app/services/queue/dialer_worker.py:397, 491, 
 ## 2. Options
 | | A1 Dograh-only now | A2 Native providers later | A3 Both |
 |---|---|---|---|
-| Effort drivers | Live E2E against a real Dograh account; verify status/disposition vocabulary; webhook rate sizing | Real STT, LLM, TTS, audio gateway + telephony adapters and transport, agent_config API, real-time latency/barge-in work; relicence/compliance per provider | Everything in A1 plus everything in A2, plus keeping two engines consistent |
+| Effort drivers | Live E2E against a real Dograh account; verify status/disposition vocabulary; webhook rate sizing | Real STT, LLM, TTS, audio gateway + telephony adapters and transport, agent_config API, real-time latency/barge-in work; per-provider contracts and compliance | Everything in A1 plus everything in A2, plus keeping two engines consistent |
 | Main risks | Vendor dependency on Dograh; unverified behaviours in 1.4 | Large build with no production path today (1.3); native code is only tested with fakes | Double maintenance; shared tables/dialer branches (1.2a) must work for both |
 | Needed before first real call | The five blocked items in `CHECKPOINT-13-NOTES.md:146-148`; one live test call; legal items from P0-7 | All of A1's compliance items plus a working provider stack | Both |
 | Native code | **Keep frozen** (not deleted): the production guard at `config.py:655` already isolates it; the working-memory table is still touched by erasure/retention (1.2a) | Becomes the main work area | Keep and maintain |
