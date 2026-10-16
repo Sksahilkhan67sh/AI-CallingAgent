@@ -43,7 +43,7 @@ jobs:
       PRIMARY_DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/ai_calling_agent_test
       REDIS_URL: redis://localhost:6379/1
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-python@v5.6.0
         with:
@@ -87,7 +87,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-node@v4.4.0
         with:
@@ -113,7 +113,7 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-python@v5.6.0
         with:
