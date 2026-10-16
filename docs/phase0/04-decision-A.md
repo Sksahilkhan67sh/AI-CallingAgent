@@ -33,6 +33,7 @@ Tests that merely reference native modules but also cover shared logic (not dead
 **1.2a Not fully dead even if Dograh-only [READ]:** `WorkingMemorySnapshot` is still referenced by data-lifecycle code:
 `app/services/data_lifecycle/erasure.py:34,65-71` (erasure scrub), `app/services/data_lifecycle/retention.py:55,146-163,276` (retention step `working_memory_snapshots` on `transcript_days`),
 and `app/core/data_inventory.py:280`. The table would stay in the schema and the erase/purge paths would keep touching it.
+Not native-only: `ConversationMessage` rows are also written by the Dograh webhook (`app/services/telephony/dograh_webhook_service.py:168-183`), so the conversation tables and transcript retention stay in use under A1.
 Dialer branches on the engine at `app/services/queue/dialer_worker.py:397, 491, 917`.
 
 ### 1.3 What the native path still lacks for real use [READ + RAN]

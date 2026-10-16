@@ -6,7 +6,7 @@
 | P0-2 | CI status on main | HUMAN-TODO | 02-ci-status.md | 2 |
 | P0-3 | Python 3.11 verification | DONE (Docker builds BLOCKED, HUMAN-TODO) | 03-python311-verification.md | 3 |
 | P0-4 | Decision A | DONE (owner decision pending) | 04-decision-A.md | 4 |
-| P0-5 | Decision B | TODO | 05-decision-B.md | - |
+| P0-5 | Decision B | DONE (owner decision pending) | 05-decision-B.md | 5 |
 | P0-6 | Decision C | TODO | 06-decision-C.md | - |
 | P0-7 | Legal brief | TODO | 07-legal-brief.md | - |
 | P0-8 | Phase 1 readiness | TODO | 08-phase1-readiness.md | - |
