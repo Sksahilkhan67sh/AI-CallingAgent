@@ -25,6 +25,9 @@ os.environ.setdefault(
     "postgresql+psycopg://postgres:postgres@localhost:5432/ai_calling_agent_test",
 )
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
+# HF1 1.3: the durable kill switch is cached in-process in production (2 s); the suite reads it
+# live so a state change is visible to the next call. Tests of the cache set it explicitly.
+os.environ.setdefault("KILL_SWITCH_CACHE_SECONDS", "0")
 
 # CP14 test-environment defaults. The pre-CP14 suite dials at whatever wall-clock time it is
 # run, and a campaign with no retry_policy row is now judged by the DEFAULT policy, so the
@@ -135,3 +138,24 @@ def _reset_spend_cap_state():
     spend_cap.reset_state()
     yield
     spend_cap.reset_state()
+
+
+@pytest.fixture(autouse=True)
+def _reset_outbound_controls():
+    """HF1 1.3: kill switch / provider halt state is COMMITTED to PostgreSQL (it must be visible
+    to other sessions), so the per-test rollback does not undo it. Clear it around every test
+    and drop the in-process cache."""
+    from sqlalchemy import text
+
+    from app.core.database import SessionLocal
+    from app.services import outbound_control
+
+    def _clear() -> None:
+        outbound_control.reset_state()
+        with SessionLocal() as session:
+            session.execute(text("DELETE FROM outbound_control"))
+            session.commit()
+
+    _clear()
+    yield
+    _clear()

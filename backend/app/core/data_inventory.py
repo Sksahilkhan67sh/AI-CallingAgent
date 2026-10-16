@@ -111,6 +111,19 @@ _SPEC: dict[str, dict[str, tuple[DataClass, Retention]]] = {
         "reserved_cost": (N, R.OPERATIONAL),
         "updated_at": (N, R.OPERATIONAL),
     },
+    # HF1 1.3: durable kill switch / provider halt. The reason is operator free text and the
+    # actor columns are usernames -- indirect identifiers, like audit_log's -- so they are
+    # classified conservatively; nothing here is a phone number or call content.
+    "outbound_control": {
+        "key": (N, R.OPERATIONAL),
+        "engaged": (N, R.OPERATIONAL),
+        "reason": (X, R.OPERATIONAL),
+        "category": (N, R.OPERATIONAL),
+        "engaged_by": (X, R.OPERATIONAL),
+        "engaged_at": (N, R.OPERATIONAL),
+        "released_by": (X, R.OPERATIONAL),
+        "released_at": (N, R.OPERATIONAL),
+    },
     "audit_log": {
         "id": (N, R.AUDIT_LOG),
         "actor": (X, R.AUDIT_LOG),

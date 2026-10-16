@@ -14,6 +14,7 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import CallEvent, ConversationMessage, ConversationSession
 from app.models.erasure_log import ErasureLog
+from app.models.outbound_control import OutboundControl
 from app.models.processed_event import ProcessedEvent
 from app.models.retention_run import RetentionRun
 from app.models.retry_policy import RetryPolicy
@@ -37,5 +38,6 @@ __all__ = [
     "CallEvent",
     "WorkingMemorySnapshot",
     "ErasureLog",
+    "OutboundControl",
     "RetentionRun",
 ]

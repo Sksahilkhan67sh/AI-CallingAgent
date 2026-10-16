@@ -72,9 +72,11 @@ def test_limits_are_per_endpoint_not_shared(anon_client, monkeypatch):
 
 
 def test_a_rejected_caller_is_rejected_even_with_a_valid_secret(anon_client, monkeypatch):
-    """The limit applies before authentication, so a flood cannot be 'paid for' with
-    a valid credential either."""
-    monkeypatch.setattr(get_settings(), "webhook_rate_limit_per_minute", 2)
+    """HF1 1.1: a flood cannot be 'paid for' with a valid credential either -- a caller
+    presenting the right secret is still held to the valid-request ceiling. (Before HF1 this
+    shared the failed-auth limit, which let an attacker's bad requests throttle the real
+    caller; the two are now separate settings.)"""
+    monkeypatch.setattr(get_settings(), "webhook_valid_ceiling_per_minute", 2)
     for _ in range(2):
         anon_client.post(_DOGRAH, json=_dograh_body(), headers=_dograh_auth())
     assert anon_client.post(_DOGRAH, json=_dograh_body(), headers=_dograh_auth()).status_code == 429
@@ -189,6 +191,9 @@ def test_key_without_ttl_is_healed_not_blocked_forever(redis_client):
 def test_check_rate_limit_reports_degraded_on_fail_open_and_raises_on_fail_closed():
     class _Broken:
         def incr(self, key):
+            raise redis_lib.RedisError("down")
+
+        def eval(self, *args):  # HF1 1.1: the limiter is now one atomic script
             raise redis_lib.RedisError("down")
 
     assert rate_limit.check_rate_limit(_Broken(), key="k", limit=1, window_seconds=60) is True

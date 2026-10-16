@@ -58,6 +58,9 @@ class CallAnalysis(Base):
         Index("ix_call_analysis_campaign_id", "campaign_id"),
         Index("ix_call_analysis_status", "status"),
         Index("ix_call_analysis_created_at", "created_at"),
+        # HF1 1.6: the FK to conversation_session had no index (deleting/joining by session
+        # scanned the table).
+        Index("ix_call_analysis_conversation_session_id", "conversation_session_id"),
         # CP14B sweeper discovery (bounded, indexed -- never a table scan).
         Index("ix_call_analysis_status_next_attempt", "status", "next_attempt_at"),
         Index("ix_call_analysis_status_lease", "status", "lease_expires_at"),

@@ -170,6 +170,14 @@ backup exists. Treat a backup as the most sensitive copy of the data.
 | erasure_log | id | NON_PII | ERASURE_LOG | n/a (kept) |
 | erasure_log | reason | PII_INDIRECT | ERASURE_LOG | n/a (kept) |
 | erasure_log | requested_at | NON_PII | ERASURE_LOG | n/a (kept) |
+| outbound_control | category | NON_PII | OPERATIONAL | n/a (kept) |
+| outbound_control | engaged | NON_PII | OPERATIONAL | n/a (kept) |
+| outbound_control | engaged_at | NON_PII | OPERATIONAL | n/a (kept) |
+| outbound_control | engaged_by | PII_INDIRECT | OPERATIONAL | n/a (kept) |
+| outbound_control | key | NON_PII | OPERATIONAL | n/a (kept) |
+| outbound_control | reason | PII_INDIRECT | OPERATIONAL | n/a (kept) |
+| outbound_control | released_at | NON_PII | OPERATIONAL | n/a (kept) |
+| outbound_control | released_by | PII_INDIRECT | OPERATIONAL | n/a (kept) |
 | processed_event | event_id | PII_INDIRECT | PROCESSED_EVENT | `RETENTION_PROCESSED_EVENT_DAYS` |
 | processed_event | event_type | NON_PII | PROCESSED_EVENT | `RETENTION_PROCESSED_EVENT_DAYS` |
 | processed_event | id | NON_PII | PROCESSED_EVENT | `RETENTION_PROCESSED_EVENT_DAYS` |
