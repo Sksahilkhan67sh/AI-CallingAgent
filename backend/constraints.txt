@@ -18,7 +18,7 @@ idna==3.20
 iniconfig==2.3.1
 Mako==1.4.3
 MarkupSafe==3.0.4
-mypy==1.11.2
+mypy==2.4.0
 mypy_extensions==1.1.0
 packaging==26.3
 phonenumbers==9.0.40
