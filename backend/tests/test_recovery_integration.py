@@ -92,8 +92,16 @@ def test_full_disconnect_retry_reconnect_cycle_through_real_worker(redis_client,
     campaign = Campaign(name="Integration recovery", status=CampaignStatus.ACTIVE)
     session.add(campaign)
     session.flush()
+    # Whole-day window, same bound conftest.py uses for the hard calling window. Ending at
+    # 23:59:00 left a one-minute closed gap (23:59:00-23:59:59 campaign time): when the
+    # retry's due time (now + 1h) fell in it, the dispatcher correctly rolled it to the
+    # next opening and this test failed, but only when it happened to run at ~22:59 IST.
     session.add(
-        RetryPolicy(campaign_id=campaign.id, window_start=_dtime(0, 0), window_end=_dtime(23, 59))
+        RetryPolicy(
+            campaign_id=campaign.id,
+            window_start=_dtime(0, 0),
+            window_end=_dtime(23, 59, 59, 999999),
+        )
     )
     contact = Contact(
         campaign_id=campaign.id,
