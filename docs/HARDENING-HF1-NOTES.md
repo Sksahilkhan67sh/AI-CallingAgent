@@ -16,7 +16,7 @@ Labels used on every statement: **VERIFIED** (proven by a test or an executed co
 | 1.4 production exposure | DONE, VERIFIED |
 | 1.5 provider configuration errors | DONE, VERIFIED (against a deterministic Dograh fake) |
 | 1.6 `call_analysis.conversation_session_id` index | DONE, VERIFIED |
-| Branch pushed / PR opened | NOT YET: BLOCKED on the owner's short-lived token (the clone holds no credential) |
+| Branch pushed / PR opened | DONE: PR #55 against `develop` (not merged; the owner reviews and merges) |
 | HF2, HF3 | NOT STARTED (one PR at a time, as instructed) |
 
 ## 1. Objective and scope
@@ -269,7 +269,7 @@ rewritten, branch-wise, with an `HF1` comment; everything that must still hold k
 - [x] No secrets, tokens or real numbers in code, tests, docs, logs or commits (fixtures use RFC 5737
       addresses and an obviously fake `dg_live_secret_abc123`)
 - [x] No new runtime dependency; one migration; nothing merged or pushed to `develop`/`main`
-- [ ] PR opened (needs the owner's token) — the owner reviews and merges
+- [x] PR #55 opened against `develop`, not merged or approved — the owner reviews and merges
 
 ## 11. Commits (failing test first, then the fix)
 
