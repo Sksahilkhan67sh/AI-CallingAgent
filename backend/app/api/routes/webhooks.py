@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.client_address import client_address
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.rate_limit import enforce_valid_webhook_ceiling, throttle_failed_webhook_auth
 from app.schemas.webhook import TelephonyCallStatusWebhook
 from app.services.security_audit import record_security_event
@@ -30,7 +30,7 @@ _RATE_KEY = "telephony_webhook"
 def _authenticate_then_limit(
     request: Request,
     x_webhook_secret: str | None = Header(default=None),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> None:
     # Compared as bytes in constant time: the previous `!=` leaked timing, and
     # compare_digest on a non-ASCII str would raise TypeError (-> HTTP 500).
@@ -61,7 +61,7 @@ def _authenticate_then_limit(
 @router.post("/call-status", dependencies=[Depends(_authenticate_then_limit)])
 def receive_call_status(
     payload: TelephonyCallStatusWebhook,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> dict:
     result = WebhookService(db).process_call_status(payload)
     if result.get("status") == "already_processed":

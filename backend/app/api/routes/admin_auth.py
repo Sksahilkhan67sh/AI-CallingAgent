@@ -14,12 +14,12 @@ When Redis cannot be read the endpoint fails CLOSED (503), as before.
 
 import hashlib
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.client_address import client_address, rate_limit_identity
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.rate_limit import FailureBucket, enforce_failure_buckets, record_failure_buckets
 from app.schemas.admin import LoginRequest, LoginResponse
 from app.services.admin.auth import InvalidCredentialsError, authenticate, create_access_token
@@ -48,7 +48,7 @@ def _failure_buckets(request: Request, username: str) -> list[FailureBucket]:
 
 @router.post("/login", response_model=LoginResponse)
 def login(
-    data: LoginRequest, request: Request, db: Session = Depends(get_db)
+    data: LoginRequest, request: Request, db: Session = DB_SESSION
 ) -> LoginResponse:
     source_ip = client_address(request)
     buckets = _failure_buckets(request, data.username)

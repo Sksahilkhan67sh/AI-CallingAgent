@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import IMPORT_LIMIT, MUTATION_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.errors import ValidationError
 from app.schemas.pagination import Page
 from app.schemas.suppression import (
@@ -32,7 +32,7 @@ def list_suppressions(
     phone: str | None = Query(default=None, max_length=64),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> Page[SuppressionResponse]:
     items, total = SuppressionService(db, actor="reader").search(phone, limit, offset)
     return Page[SuppressionResponse](items=list(items), total=total, limit=limit, offset=offset)
@@ -47,7 +47,7 @@ def list_suppressions(
 def add_suppression(
     data: SuppressionAddRequest,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> SuppressionAddResponse:
     result = SuppressionService(db, actor=principal.username).add(
@@ -66,7 +66,7 @@ def add_suppression(
 async def import_suppressions(
     file: UploadFile = File(...),
     reason: str | None = Form(default=None, max_length=200),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> SuppressionImportResult:
     contents = await file.read(MAX_IMPORT_FILE_BYTES + 1)
@@ -85,7 +85,7 @@ async def import_suppressions(
 def remove_suppression(
     suppression_id: uuid.UUID,
     data: SuppressionRemoveRequest,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> Response:
     SuppressionService(db, actor=principal.username).remove(suppression_id, data.reason)

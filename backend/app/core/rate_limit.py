@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 
 from app.core.client_address import rate_limit_identity
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.services.audit_service import record_audit_event
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ def rate_limit_dependency(
     `limit` may be a callable so it is read per request (settings stay tunable)."""
 
     def _dependency(
-        db: Session = Depends(get_db), bucket_owner: str = Depends(identity)
+        db: Session = DB_SESSION, bucket_owner: str = Depends(identity)
     ) -> None:
         from app.core.redis_client import get_redis
 

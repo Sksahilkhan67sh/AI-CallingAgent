@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.client_address import client_address
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.rate_limit import enforce_valid_webhook_ceiling, throttle_failed_webhook_auth
 from app.schemas.dograh_webhook import DograhWebhookPayload
 from app.services.security_audit import record_security_event
@@ -32,7 +32,7 @@ def _authenticate_then_limit(
     request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> None:
     """Dograh's Webhook node supports BEARER_TOKEN or API_KEY auth on
     the outgoing request (its own docs) -- either is accepted here so
@@ -80,7 +80,7 @@ def _authenticate_then_limit(
 @router.post("/call-completed", dependencies=[Depends(_authenticate_then_limit)])
 def dograh_call_completed(
     payload: DograhWebhookPayload,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> dict:
     try:
         result = process_dograh_webhook(db, payload)

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.models.enums import AnalysisStatus, CallAttemptState
 from app.schemas.admin import CallAttemptDetail, CallAttemptListItem
 from app.schemas.pagination import Page
@@ -27,7 +27,7 @@ def list_attempts(
     analysis_status: AnalysisStatus | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> Page[CallAttemptListItem]:
     items, total = list_call_attempts(
@@ -45,7 +45,7 @@ def list_attempts(
 @router.get("/{call_attempt_id}", response_model=CallAttemptDetail)
 def get_attempt(
     call_attempt_id: uuid.UUID,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> CallAttemptDetail:
     return get_call_attempt_detail(db, call_attempt_id)

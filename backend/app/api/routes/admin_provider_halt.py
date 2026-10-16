@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import MUTATION_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.errors import ServiceUnavailableError
 from app.services import outbound_control, provider_halt
 from app.services.admin.auth import AdminPrincipal
@@ -54,7 +54,7 @@ def get_provider_halt() -> dict[str, object]:
 @router.post("/release", response_model=ProviderHaltReleaseResult, dependencies=[MUTATION_LIMIT])
 def release_provider_halt(
     data: ProviderHaltReleaseRequest,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> ProviderHaltReleaseResult:
     try:

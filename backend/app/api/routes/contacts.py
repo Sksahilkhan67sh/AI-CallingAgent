@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import MUTATION_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.models.enums import ContactStatus
 from app.schemas.contact import ContactCreate, ContactResponse, ContactUpdate
 from app.schemas.pagination import Page
@@ -30,7 +30,7 @@ _ANY_ROLE = [Depends(require_admin)]
 )
 def create_contact(
     data: ContactCreate,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> ContactResponse:
     contact = ContactService(db, actor=principal.username).create_contact(data)
@@ -43,7 +43,7 @@ def list_contacts(
     status_filter: ContactStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> Page[ContactResponse]:
     items, total = ContactService(db).list_contacts(
         campaign_id=campaign_id, status=status_filter, limit=limit, offset=offset
@@ -57,7 +57,7 @@ def list_contacts(
 
 
 @router.get("/{contact_id}", response_model=ContactResponse, dependencies=_ANY_ROLE)
-def get_contact(contact_id: uuid.UUID, db: Session = Depends(get_db)) -> ContactResponse:
+def get_contact(contact_id: uuid.UUID, db: Session = DB_SESSION) -> ContactResponse:
     contact = ContactService(db).get_contact(contact_id)
     return ContactResponse.model_validate(contact)
 
@@ -70,7 +70,7 @@ def get_contact(contact_id: uuid.UUID, db: Session = Depends(get_db)) -> Contact
 def update_contact(
     contact_id: uuid.UUID,
     data: ContactUpdate,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> ContactResponse:
     contact = ContactService(db, actor=principal.username).update_contact(contact_id, data)
@@ -84,7 +84,7 @@ def update_contact(
 )
 def deactivate_contact(
     contact_id: uuid.UUID,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = _ADMIN,
 ) -> ContactResponse:
     contact = ContactService(db, actor=principal.username).deactivate_contact(contact_id)

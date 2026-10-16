@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin
 from app.api.route_limits import ANALYSIS_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.errors import NotFoundError
 from app.models.call_analysis import CallAnalysis
 from app.schemas.call_analysis import CallAnalysisResponse
@@ -33,7 +33,7 @@ _ANY_ROLE = [Depends(require_admin)]
     dependencies=[*_ANY_ROLE, ANALYSIS_LIMIT],
 )
 def get_analysis_by_call_attempt(
-    call_attempt_id: uuid.UUID, db: Session = Depends(get_db)
+    call_attempt_id: uuid.UUID, db: Session = DB_SESSION
 ) -> CallAnalysisResponse:
     analysis = (
         db.execute(select(CallAnalysis).where(CallAnalysis.call_attempt_id == call_attempt_id))
@@ -51,7 +51,7 @@ def get_analysis_by_call_attempt(
     dependencies=[*_ANY_ROLE, ANALYSIS_LIMIT],
 )
 def get_latest_analysis_by_contact(
-    contact_id: uuid.UUID, db: Session = Depends(get_db)
+    contact_id: uuid.UUID, db: Session = DB_SESSION
 ) -> CallAnalysisResponse:
     analysis = (
         db.execute(
@@ -77,7 +77,7 @@ def list_analysis_by_campaign(
     campaign_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
 ) -> Page[CallAnalysisResponse]:
     base = select(CallAnalysis).where(CallAnalysis.campaign_id == campaign_id)
     total = db.execute(
