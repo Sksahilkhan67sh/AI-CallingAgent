@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.models.enums import ContactStatus
 from app.schemas.admin import ContactDetail, ContactListItem
 from app.schemas.pagination import Page
@@ -23,7 +23,7 @@ def list_admin_contacts(
     status_filter: ContactStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> Page[ContactListItem]:
     items, total = list_contacts(
@@ -35,7 +35,7 @@ def list_admin_contacts(
 @router.get("/{contact_id}", response_model=ContactDetail)
 def get_admin_contact(
     contact_id: uuid.UUID,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> ContactDetail:
     return get_contact_detail(db, contact_id)

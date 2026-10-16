@@ -25,6 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.database import get_db
 from app.main import app
 from app.models.audit_log import AuditLog
 from app.models.campaign import Campaign
@@ -143,3 +144,25 @@ def test_commit_failure_at_request_end_is_never_a_silent_success(campaign_name, 
     assert seen.statuses[0] >= 500
     assert b'"name"' not in seen.body  # the created resource was not echoed back as a success
     assert _committed_campaigns(campaign_name) == 0
+
+
+def _get_db_dependants(dependant, found):
+    for sub in dependant.dependencies:
+        if sub.call is get_db:
+            found.append(sub)
+        _get_db_dependants(sub, found)
+    return found
+
+
+def test_every_get_db_use_is_function_scoped_so_all_share_one_session():
+    """A plain ``Depends(get_db)`` anywhere would (a) commit after the response is sent and
+    (b) get its own session, because the dependency cache is keyed by scope."""
+    from fastapi.routing import APIRoute
+
+    found: list = []
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            _get_db_dependants(route.dependant, found)
+
+    assert len(found) > 40  # the routes really were walked
+    assert {dep.scope for dep in found} == {"function"}

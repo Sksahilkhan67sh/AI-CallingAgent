@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import MUTATION_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.models.enums import CampaignStatus
 from app.schemas.admin import CampaignDetail, CampaignListItem
 from app.schemas.campaign import CampaignResponse, CampaignUpdate
@@ -34,7 +34,7 @@ def list_admin_campaigns(
     status_filter: CampaignStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> Page[CampaignListItem]:
     items, total = list_campaigns(db, status=status_filter, limit=limit, offset=offset)
@@ -44,7 +44,7 @@ def list_admin_campaigns(
 @router.get("/{campaign_id}", response_model=CampaignDetail)
 def get_admin_campaign(
     campaign_id: uuid.UUID,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> CampaignDetail:
     return get_campaign_detail(db, campaign_id)
@@ -58,7 +58,7 @@ def get_admin_campaign(
 def transition_campaign_status(
     campaign_id: uuid.UUID,
     new_status: CampaignStatus,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> CampaignResponse:
     """§5: operational controls (activate/pause/resume/complete) require
@@ -77,7 +77,7 @@ def transition_campaign_status(
     dependencies=[Depends(require_admin)],
 )
 def get_retry_policy(
-    campaign_id: uuid.UUID, db: Session = Depends(get_db)
+    campaign_id: uuid.UUID, db: Session = DB_SESSION
 ) -> RetryPolicyResponse:
     """CP14: any role may read it. `persisted: false` means the campaign has no stored row
     and this is the DEFAULT policy that is in force."""
@@ -92,7 +92,7 @@ def get_retry_policy(
 def put_retry_policy(
     campaign_id: uuid.UUID,
     data: RetryPolicyUpdate,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> RetryPolicyResponse:
     return RetryPolicyService(db, actor=principal.username).put(campaign_id, data)

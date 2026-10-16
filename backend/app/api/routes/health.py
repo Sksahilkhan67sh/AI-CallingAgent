@@ -2,11 +2,11 @@
 Checkpoint 09 §9 with a separate readiness probe.
 """
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.schemas.admin import ComponentHealth
 from app.services.admin.system_service import check_postgres, check_redis
 
@@ -24,7 +24,7 @@ def get_health() -> dict:
 
 
 @router.get("/ready")
-def get_readiness(response: Response, db: Session = Depends(get_db)) -> dict:
+def get_readiness(response: Response, db: Session = DB_SESSION) -> dict:
     """Readiness: are this process's actually-required dependencies
     reachable right now. Scoped to Postgres and Redis -- the two
     dependencies every request path needs regardless of

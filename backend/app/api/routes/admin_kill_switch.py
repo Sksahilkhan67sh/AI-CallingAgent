@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin, require_role
 from app.api.route_limits import MUTATION_LIMIT
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.core.errors import ServiceUnavailableError
 from app.services import kill_switch, outbound_control, provider_halt
 from app.services.admin.auth import AdminPrincipal
@@ -54,7 +54,7 @@ def get_kill_switch() -> dict[str, object]:
 )
 def enable_kill_switch(
     data: KillSwitchEnableRequest | None = None,
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> KillSwitchChangeResult:
     reason = data.reason if data else None
@@ -81,7 +81,7 @@ def enable_kill_switch(
     dependencies=[MUTATION_LIMIT],
 )
 def disable_kill_switch(
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     principal: AdminPrincipal = Depends(require_role("admin")),
 ) -> KillSwitchChangeResult:
     try:

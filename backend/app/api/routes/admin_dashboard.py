@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.admin_deps import require_admin
-from app.core.database import get_db
+from app.core.database import DB_SESSION
 from app.schemas.admin import AnalyticsResponse, DashboardOverview, SystemHealthResponse
 from app.services.admin.analytics_service import get_analytics
 from app.services.admin.auth import AdminPrincipal
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/v1/admin/dashboard", tags=["Admin Dashboard"])
 
 @router.get("/overview", response_model=DashboardOverview)
 def overview(
-    db: Session = Depends(get_db), _principal: AdminPrincipal = Depends(require_admin)
+    db: Session = DB_SESSION, _principal: AdminPrincipal = Depends(require_admin)
 ) -> DashboardOverview:
     return get_dashboard_overview(db)
 
@@ -30,7 +30,7 @@ def overview(
 def analytics(
     time_range: str = Query(default="7d", pattern="^(today|7d|30d)$", alias="range"),
     campaign_id: uuid.UUID | None = Query(default=None),
-    db: Session = Depends(get_db),
+    db: Session = DB_SESSION,
     _principal: AdminPrincipal = Depends(require_admin),
 ) -> AnalyticsResponse:
     return get_analytics(db, range_key=time_range, campaign_id=campaign_id)
@@ -38,6 +38,6 @@ def analytics(
 
 @router.get("/system", response_model=SystemHealthResponse)
 def system_health(
-    db: Session = Depends(get_db), _principal: AdminPrincipal = Depends(require_admin)
+    db: Session = DB_SESSION, _principal: AdminPrincipal = Depends(require_admin)
 ) -> SystemHealthResponse:
     return get_system_health(db)
