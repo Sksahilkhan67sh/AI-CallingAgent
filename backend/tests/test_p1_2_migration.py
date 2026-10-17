@@ -140,7 +140,8 @@ def test_upgrade_backfills_the_retry_scheduled_contact_and_touches_nothing_else(
 
 def test_the_migration_is_reversible_and_alembic_check_is_clean(scratch):
     cfg, engine = scratch
-    command.upgrade(cfg, REV)
+    command.upgrade(cfg, "head")  # `check` needs a database at the current head
+    assert NEW_COLUMNS <= _columns(engine)
     command.check(cfg)  # raises if the models and the migrated schema differ
 
     command.downgrade(cfg, PRE)

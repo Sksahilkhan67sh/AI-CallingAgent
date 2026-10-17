@@ -23,6 +23,10 @@ class ContactStatus(str, enum.Enum):
     COMPLETED = "Completed"
     COMPLETED_PARTIAL = "CompletedPartial"
     CLOSED = "Closed"
+    # P1-4: set by the stuck-call sweeper when an attempt was claimed but no outcome ever arrived
+    # and it cannot be proven that no call was placed. Never dialed automatically; a late
+    # webhook for the attempt still replaces it. Resolved by an operator.
+    NEEDS_REVIEW = "NeedsReview"
 
 
 class CampaignStatus(str, enum.Enum):

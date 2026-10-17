@@ -8,3 +8,6 @@
 | `RETRY_REDISPATCH_SECONDS` | 900 | P1-2 | Must exceed the longest normal wait between dispatch and dial claim; 900 is safe for the default queue depth. |
 | `REDIS_PASSWORD` (compose / root `.env`) | none, required | P1-3 | Long random value; compose refuses to start without it. Put it in the app's `REDIS_URL` (`redis://:<password>@host:6379/0`). |
 | `REDIS_URL` in production | n/a | P1-3 | Must carry a password or the app refuses to boot (`ENVIRONMENT=production`). |
+| `SWEEPER_STUCK_AFTER_SECONDS` | 3600 | P1-4 | Must exceed the longest legitimate call plus webhook delay, or live calls are flagged. Keep it well above Dograh's max call duration. |
+| `SWEEPER_INTERVAL_SECONDS` | 60 | P1-4 | Keep 60; each pass is one indexed, batch-limited query. |
+| `SWEEPER_BATCH_LIMIT` | 100 | P1-4 | Rows locked per page; the process loops until a page is empty. |

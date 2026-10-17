@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     retry_rebuild_interval_seconds: int = 60
     retry_rebuild_batch_size: int = 500
     retry_redispatch_seconds: int = 900
+    # P1-4: stuck-call sweeper (`python -m app.sweeper`). An attempt still INITIATED this long after
+    # it started, with its contact still DIALING, is marked for review (never redialed). Must be
+    # LONGER than the longest legitimate call plus webhook delay, or live calls get flagged.
+    sweeper_stuck_after_seconds: int = 3600
+    sweeper_interval_seconds: int = 60
+    sweeper_batch_limit: int = 100
 
     # Telephony provider selection -- "mock" is the only supported value
     # until real provider credentials exist (see
@@ -537,6 +543,9 @@ class Settings(BaseSettings):
             "retry_rebuild_interval_seconds",
             "retry_rebuild_batch_size",
             "retry_redispatch_seconds",
+            "sweeper_stuck_after_seconds",
+            "sweeper_interval_seconds",
+            "sweeper_batch_limit",
         ):
             if getattr(self, name) <= 0:
                 problems.append(f"{name.upper()} must be > 0")
