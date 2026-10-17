@@ -1,8 +1,22 @@
 """Admission control: CPS, concurrency, backpressure, circuit breaker --
 Checkpoint 03 Steps 8-11, 20, real Redis (Step 31)."""
 
+from types import SimpleNamespace
+
+import pytest
+
+from app.services.queue import admission_controller
 from app.services.queue.admission_controller import AdmissionController
 from app.services.telephony.circuit_breaker import CircuitBreaker
+
+
+@pytest.fixture(autouse=True)
+def _pinned_cps_second(monkeypatch):
+    """CPS counters are keyed by ``int(time.time())`` (a fixed one-second window), so a test
+    that fires several admissions and expects an exact count fails whenever they straddle a
+    wall-clock second boundary (seen in CI: 4 admitted instead of 2). Pin the controller's
+    clock to the middle of one second; nothing here depends on real time passing."""
+    monkeypatch.setattr(admission_controller, "time", SimpleNamespace(time=lambda: 1_700_000_000.5))
 
 
 def _controller(redis_client, **overrides) -> AdmissionController:
