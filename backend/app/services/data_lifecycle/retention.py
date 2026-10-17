@@ -56,6 +56,7 @@ from app.models.working_memory_snapshot import WorkingMemorySnapshot
 from app.services.audit_service import record_audit_event
 from app.services.data_lifecycle.fingerprint import PLACEHOLDER_PREFIX
 from app.services.data_lifecycle.holds import held_campaign_ids, held_contact_ids
+from app.services.data_lifecycle.sql_util import rowcount
 
 logger = logging.getLogger("retention")
 
@@ -138,7 +139,7 @@ def _transcript_messages(cutoff: datetime, _run: uuid.UUID | None) -> Select:
 
 
 def _delete_messages(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
-    return db.execute(delete(ConversationMessage).where(ConversationMessage.id.in_(ids))).rowcount
+    return rowcount(db.execute(delete(ConversationMessage).where(ConversationMessage.id.in_(ids))))
 
 
 def _snapshots(cutoff: datetime, _run: uuid.UUID | None) -> Select:
@@ -158,7 +159,7 @@ def _snapshots(cutoff: datetime, _run: uuid.UUID | None) -> Select:
 
 
 def _scrub_snapshots(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
-    return db.execute(
+    return rowcount(db.execute(
         update(WorkingMemorySnapshot)
         .where(WorkingMemorySnapshot.id.in_(ids))
         .values(
@@ -166,7 +167,7 @@ def _scrub_snapshots(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
             objections_raised=text("'[]'::jsonb"),
             last_agent_utterance=None,
         )
-    ).rowcount
+    ))
 
 
 def _analysis(cutoff: datetime, _run: uuid.UUID | None) -> Select:
@@ -187,7 +188,7 @@ def _analysis(cutoff: datetime, _run: uuid.UUID | None) -> Select:
 
 def _scrub_analysis(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
     # Free text and evidence only; scores, enums and provenance stay.
-    return db.execute(
+    return rowcount(db.execute(
         update(CallAnalysis)
         .where(CallAnalysis.id.in_(ids))
         .values(
@@ -199,7 +200,7 @@ def _scrub_analysis(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
             customer_needs=text("'[]'::jsonb"),
             updated_at=CallAnalysis.updated_at,  # a purge is not an analysis update
         )
-    ).rowcount
+    ))
 
 
 def _contacts(cutoff: datetime, _run: uuid.UUID | None) -> Select:
@@ -222,7 +223,7 @@ def scrub_contacts(db: Session, contact_ids: list[uuid.UUID], now: datetime) -> 
     constraint still holds), set purged_at, keep status and counters. `updated_at` is pinned
     so the scrub itself never moves any age-based decision."""
     placeholder = func.concat(PLACEHOLDER_PREFIX, func.replace(cast(Contact.id, Text), "-", ""))
-    return db.execute(
+    return rowcount(db.execute(
         update(Contact)
         .where(Contact.id.in_(contact_ids))
         .values(
@@ -231,7 +232,7 @@ def scrub_contacts(db: Session, contact_ids: list[uuid.UUID], now: datetime) -> 
             purged_at=now,
             updated_at=Contact.updated_at,
         )
-    ).rowcount
+    ))
 
 
 def _audit(cutoff: datetime, _run: uuid.UUID | None) -> Select:
@@ -249,7 +250,7 @@ def _audit(cutoff: datetime, _run: uuid.UUID | None) -> Select:
 
 
 def _delete_audit(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
-    return db.execute(delete(AuditLog).where(AuditLog.id.in_(ids))).rowcount
+    return rowcount(db.execute(delete(AuditLog).where(AuditLog.id.in_(ids))))
 
 
 def _processed(cutoff: datetime, _run: uuid.UUID | None) -> Select:
@@ -257,7 +258,7 @@ def _processed(cutoff: datetime, _run: uuid.UUID | None) -> Select:
 
 
 def _delete_processed(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
-    return db.execute(delete(ProcessedEvent).where(ProcessedEvent.id.in_(ids))).rowcount
+    return rowcount(db.execute(delete(ProcessedEvent).where(ProcessedEvent.id.in_(ids))))
 
 
 def _run_history(cutoff: datetime, current: uuid.UUID | None) -> Select:
@@ -268,7 +269,7 @@ def _run_history(cutoff: datetime, current: uuid.UUID | None) -> Select:
 
 
 def _delete_runs(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
-    return db.execute(delete(RetentionRun).where(RetentionRun.id.in_(ids))).rowcount
+    return rowcount(db.execute(delete(RetentionRun).where(RetentionRun.id.in_(ids))))
 
 
 _STEPS: tuple[_Step, ...] = (

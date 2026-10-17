@@ -10,12 +10,12 @@ import uuid
 
 import psycopg
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from alembic import command
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from app.core.config import get_settings
 from app.models.call_analysis import CallAnalysis
 from app.models.call_attempt import CallAttempt

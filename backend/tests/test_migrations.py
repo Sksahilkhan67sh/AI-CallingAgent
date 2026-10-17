@@ -7,10 +7,10 @@ import os
 
 import psycopg
 import pytest
+from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
 from alembic import command
-from alembic.config import Config
 
 MIGRATION_TEST_DB = "ai_calling_agent_migration_test"
 ADMIN_DB_URL = os.environ["PRIMARY_DB_URL"].rsplit("/", 1)[0] + "/postgres"

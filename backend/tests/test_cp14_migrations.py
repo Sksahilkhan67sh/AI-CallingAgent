@@ -8,11 +8,11 @@ import uuid
 
 import psycopg
 import pytest
+from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from alembic import command
-from alembic.config import Config
 from app.core.config import get_settings
 
 PRE_CP14 = "d15c334bf7e7"

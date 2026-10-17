@@ -36,6 +36,7 @@ from app.repositories.suppression_repository import SuppressionRepository, canon
 from app.services.audit_service import record_audit_event
 from app.services.data_lifecycle.fingerprint import PLACEHOLDER_PREFIX, erasure_fingerprint
 from app.services.data_lifecycle.retention import scrub_contacts
+from app.services.data_lifecycle.sql_util import rowcount
 from app.services.phone import InvalidPhoneError, last4, normalize_phone
 
 # Contact statuses that may keep their value after a scrub; anything still "live" becomes
@@ -58,10 +59,10 @@ def _scrub_content(db: Session, contact_ids: list[uuid.UUID]) -> dict[str, int]:
     session_ids = select(ConversationSession.id).where(
         ConversationSession.call_attempt_id.in_(attempt_ids)
     )
-    messages = db.execute(
+    messages = rowcount(db.execute(
         delete(ConversationMessage).where(ConversationMessage.session_id.in_(session_ids))
-    ).rowcount
-    snapshots = db.execute(
+    ))
+    snapshots = rowcount(db.execute(
         update(WorkingMemorySnapshot)
         .where(
             WorkingMemorySnapshot.attempt_id.in_(attempt_ids),
@@ -72,8 +73,8 @@ def _scrub_content(db: Session, contact_ids: list[uuid.UUID]) -> dict[str, int]:
             ),
         )
         .values(captured_entities={}, objections_raised=[], last_agent_utterance=None)
-    ).rowcount
-    analyses = db.execute(
+    ))
+    analyses = rowcount(db.execute(
         update(CallAnalysis)
         .where(
             CallAnalysis.contact_id.in_(contact_ids),
@@ -94,7 +95,7 @@ def _scrub_content(db: Session, contact_ids: list[uuid.UUID]) -> dict[str, int]:
             objections=[],
             customer_needs=[],
         )
-    ).rowcount
+    ))
     return {"messages": messages, "snapshots": snapshots, "analyses": analyses}
 
 
@@ -226,11 +227,11 @@ def _contact_pages(db: Session, page: int) -> Iterator[list[tuple[uuid.UUID, str
         )
         if last is not None:
             stmt = stmt.where(Contact.id > last)
-        rows = [tuple(r) for r in db.execute(stmt).all()]
+        rows = [(r[0], r[1], r[2]) for r in db.execute(stmt).all()]
         if not rows:
             return
         last = rows[-1][0]
-        yield rows  # type: ignore[misc]
+        yield rows
 
 
 def reapply_erasures(

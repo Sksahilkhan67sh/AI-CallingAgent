@@ -159,8 +159,16 @@ def test_every_get_db_use_is_function_scoped_so_all_share_one_session():
     (b) get its own session, because the dependency cache is keyed by scope."""
     from fastapi.routing import APIRoute
 
+    try:
+        # FastAPI >= 0.14x: app.routes holds lazy _IncludedRouter objects, not flat APIRoutes.
+        from fastapi.routing import iter_route_contexts
+
+        routes = [c.route for c in iter_route_contexts(app.routes)]
+    except ImportError:
+        routes = list(app.routes)
+
     found: list = []
-    for route in app.routes:
+    for route in routes:
         if isinstance(route, APIRoute):
             _get_db_dependants(route.dependant, found)
 
