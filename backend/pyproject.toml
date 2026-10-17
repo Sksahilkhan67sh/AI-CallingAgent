@@ -11,7 +11,9 @@ select = ["E", "F", "I", "B", "UP"]
 # B008: FastAPI's `Depends(...)` in a parameter default is the documented,
 # idiomatic pattern (https://fastapi.tiangolo.com/tutorial/dependencies/),
 # not the mutable-default-argument bug this rule is designed to catch.
-ignore = ["B008"]
+# UP042 (ruff 0.17): "use StrEnum" for `class X(str, Enum)`. Not applied: StrEnum changes
+# str()/format() of members, and these enums are persisted values, JSON payloads and log fields.
+ignore = ["B008", "UP042"]
 
 [tool.ruff.lint.per-file-ignores]
 # Alembic's own generated template -- not our code style to enforce.

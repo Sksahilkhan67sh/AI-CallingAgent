@@ -9,11 +9,11 @@ import uuid
 
 import psycopg
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from alembic import command
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from app.core.config import get_settings
 
 PRE_CP15A = "a83d13f0c415"
