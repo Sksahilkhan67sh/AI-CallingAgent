@@ -45,7 +45,10 @@ def _check_worker(name: str, heartbeat_key: str) -> ComponentHealth:
         return ComponentHealth(
             name=name, status="unknown", detail="No heartbeat observed yet"
         )
-    return ComponentHealth(name=name, status="ok", detail=f"Last heartbeat: {last}")
+    # get_redis() uses decode_responses=True, so this is already a str; decode defensively so
+    # the detail can never render as "b'...'" (redis 8 stubs type the value as str | bytes).
+    last_text = last.decode() if isinstance(last, bytes) else last
+    return ComponentHealth(name=name, status="ok", detail=f"Last heartbeat: {last_text}")
 
 
 def _queue_health(name: str, redis_client, stream_key: str, group: str) -> QueueHealth:
