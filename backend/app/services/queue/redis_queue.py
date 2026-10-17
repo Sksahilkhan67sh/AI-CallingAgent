@@ -15,13 +15,20 @@ from typing import Any, cast
 import redis
 from redis.commands.core import Script
 
+from app.core.config import get_settings
 from app.services.queue.job import DialJob
 
-# Bounded, approximate trim (Step 39): a resource-safety measure, not a correctness one.
-_STREAM_MAXLEN = 200_000
 
-# KEYS: stream, guard. ARGV: guard ttl seconds, stream maxlen, job json. 1 = queued, 0 = the
-# guard was already set. One script, so no other client can slip between the check and the add.
+class QueueBacklogFull(Exception):
+    """The stream already holds `queue_max_backlog` jobs. Nothing was added and no guard was
+    set: the caller leaves the contact PENDING in PostgreSQL (or reschedules it) and tries
+    again later. A job is never dropped to make room (P1-1)."""
+
+
+# KEYS: stream, guard. ARGV: guard ttl seconds, max backlog, job json. 1 = queued, 0 = the
+# guard was already set, -1 = the backlog is full. One script, so no other client can slip
+# between the check and the add. The stream is never trimmed by length: `XADD MAXLEN ~` used to
+# evict the OLDEST entries even when no consumer had read them (P1-1).
 # Redis scripts do not roll back: the job is added BEFORE the guard is set, so a failing XADD
 # can never leave a guard behind with no job (the worst a failure here can do is leave a job
 # without its guard, i.e. a later harmless duplicate reference -- never a lost one).
@@ -29,7 +36,10 @@ _ENQUEUE_ONCE_LUA = """
 if redis.call('EXISTS', KEYS[2]) == 1 then
   return 0
 end
-redis.call('XADD', KEYS[1], 'MAXLEN', '~', ARGV[2], '*', 'job', ARGV[3])
+if redis.call('XLEN', KEYS[1]) >= tonumber(ARGV[2]) then
+  return -1
+end
+redis.call('XADD', KEYS[1], '*', 'job', ARGV[3])
 redis.call('SET', KEYS[2], '1', 'EX', ARGV[1])
 return 1
 """
@@ -50,25 +60,25 @@ class RedisStreamQueue:
                 raise
 
     def enqueue(self, job: DialJob) -> str:
-        # A bounded, approximate trim keeps the stream from growing
-        # without limit (Step 39) -- it's a resource-safety measure, not
-        # a correctness one; delivery/ack semantics don't depend on it.
-        message_id = self.redis.xadd(
-            self.stream_key, {"job": job.to_json()}, maxlen=_STREAM_MAXLEN, approximate=True
-        )
+        # Never refused and never trimmed: recovery retries use this and must not be dropped.
+        # Entries are released only by ack(); first-attempt backpressure is in enqueue_once.
+        message_id = self.redis.xadd(self.stream_key, {"job": job.to_json()})
         return cast(str, message_id)
 
     def enqueue_once(self, job: DialJob, guard_key: str, guard_ttl_seconds: int) -> bool:
         """CP12-C: add the job unless its duplicate-enqueue guard exists, and set the guard --
         in ONE atomic Redis step. True = queued; False = already guarded (nothing added).
+        Raises QueueBacklogFull when the stream holds `queue_max_backlog` jobs (nothing added).
 
         Before this the guard was set first and the job added second: a failure in between left
         a guard with no job, so that contact could not be enqueued again for the guard's
         lifetime. Raises redis.RedisError if Redis cannot answer."""
         queued = self._enqueue_once(
             keys=[self.stream_key, guard_key],
-            args=[guard_ttl_seconds, _STREAM_MAXLEN, job.to_json()],
+            args=[guard_ttl_seconds, get_settings().queue_max_backlog, job.to_json()],
         )
+        if queued == -1:
+            raise QueueBacklogFull(self.stream_key)
         return bool(queued)
 
     @cached_property
@@ -91,7 +101,12 @@ class RedisStreamQueue:
         return message_id, DialJob.from_json(fields["job"])
 
     def ack(self, message_id: str) -> None:
-        self.redis.xack(self.stream_key, self.group, message_id)
+        # XACK then XDEL in one transaction: an entry is removed only once it is acknowledged,
+        # so the stream holds exactly the unread plus in-flight jobs and cannot grow forever.
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.xack(self.stream_key, self.group, message_id)
+        pipe.xdel(self.stream_key, message_id)
+        pipe.execute()
 
     def reclaim_stale(
         self, consumer_name: str, idle_ms: int, count: int = 10

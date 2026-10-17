@@ -28,7 +28,7 @@ from app.services.audit_service import record_audit_event
 from app.services.calling_window import InvalidTimezoneError, NoDialableWindowError
 from app.services.queue.enqueue_service import ENQUEUE_GUARD_TTL_SECONDS, enqueue_guard_key
 from app.services.queue.job import DialJob
-from app.services.queue.redis_queue import RedisStreamQueue
+from app.services.queue.redis_queue import QueueBacklogFull, RedisStreamQueue
 from app.services.recovery.job import RecoveryJob
 from app.services.recovery.scheduler import DIAL_JOB_KIND, RecoveryScheduler
 from app.services.retry_policy_service import (
@@ -210,7 +210,12 @@ def _process_deferred_dial(
         return 0
     # The guard was released when the job was deferred; setting it again means a manual
     # re-enqueue that already queued this contact is not doubled up.
-    queued = queue.enqueue_once(
-        dial_job, enqueue_guard_key(dial_job.idempotency_key), ENQUEUE_GUARD_TTL_SECONDS
-    )
+    try:
+        queued = queue.enqueue_once(
+            dial_job, enqueue_guard_key(dial_job.idempotency_key), ENQUEUE_GUARD_TTL_SECONDS
+        )
+    except QueueBacklogFull:
+        # The entry was claimed (ZREM) above: put it back, never drop it (P1-1).
+        scheduler.reschedule(job_json, now + timedelta(seconds=PAUSE_RECHECK_SECONDS))
+        return 0
     return 1 if queued else 0

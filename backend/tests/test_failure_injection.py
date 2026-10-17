@@ -406,7 +406,8 @@ def test_retry_storm_stays_bounded_backed_off_and_rechecks_everything(
     assert len(scheduled) == n  # one retry each -- RecoveryManager is the only owner
     assert all(29 <= score - base.timestamp() <= 40 for _, score in scheduled)  # 30s backoff
     assert dispatch_due_recovery_jobs(scheduler, queue, now=base + timedelta(seconds=5)) == 0
-    assert queue.redis.xlen(queue.stream_key) == n  # nothing re-enqueued immediately
+    # round 1 was fully acked (entries leave the stream, P1-1), so 0 == nothing re-enqueued
+    assert queue.redis.xlen(queue.stream_key) == 0
 
     # Between rounds: opt-outs and a closed campaign are re-checked at dispatch.
     with _Session() as s:

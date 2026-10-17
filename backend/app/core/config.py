@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     # How long a claimed-but-unacked stream entry may sit idle before
     # another worker is allowed to reclaim it (a crashed worker's job).
     queue_reclaim_idle_ms: int = 30_000
+    # P1-1: most jobs the dial stream may hold (unread + in flight). A first-attempt enqueue past
+    # it stops and leaves the rest PENDING in PostgreSQL; nothing is ever trimmed. One entry is
+    # about 511 bytes in Redis, so the default bounds the stream near 100 MB.
+    queue_max_backlog: int = 200_000
 
     # Telephony provider selection -- "mock" is the only supported value
     # until real provider credentials exist (see
@@ -512,6 +516,7 @@ class Settings(BaseSettings):
             "max_import_body_bytes",
             "dograh_transcript_max_bytes",
             "dograh_transcript_max_lines",
+            "queue_max_backlog",
         ):
             if getattr(self, name) <= 0:
                 problems.append(f"{name.upper()} must be > 0")

@@ -32,7 +32,7 @@ from app.schemas.queue import EnqueueResult
 from app.services import kill_switch
 from app.services.audit_service import record_audit_event
 from app.services.queue.job import DialJob
-from app.services.queue.redis_queue import RedisStreamQueue
+from app.services.queue.redis_queue import QueueBacklogFull, RedisStreamQueue
 
 # Newly queued jobs per request. Reaching it is reported (complete=False), never silent.
 MAX_ENQUEUE_PER_REQUEST = 100_000
@@ -92,6 +92,7 @@ class QueueEnqueueService:
         page_size = get_settings().enqueue_page_size
         discovered = enqueued = skipped_suppressed = skipped_duplicate = pages = 0
         complete = True
+        backlog_full = False
         cursor: uuid.UUID | None = None
         started = time.monotonic()
 
@@ -116,9 +117,19 @@ class QueueEnqueueService:
                         job = DialJob.new(
                             campaign_id=campaign_id, contact_id=contact_id, attempt_number=1
                         )
-                        if self.queue.enqueue_once(
-                            job, enqueue_guard_key(job.idempotency_key), ENQUEUE_GUARD_TTL_SECONDS
-                        ):
+                        try:
+                            queued = self.queue.enqueue_once(
+                                job,
+                                enqueue_guard_key(job.idempotency_key),
+                                ENQUEUE_GUARD_TTL_SECONDS,
+                            )
+                        except QueueBacklogFull:
+                            # Nothing was added or guarded: this contact (and the rest) stay
+                            # PENDING in PostgreSQL for the next run. Never drop to make room.
+                            complete = False
+                            backlog_full = True
+                            break
+                        if queued:
                             enqueued += 1
                         else:
                             skipped_duplicate += 1
@@ -177,6 +188,7 @@ class QueueEnqueueService:
                 "discovered": discovered,
                 "pages_processed": pages,
                 "complete": complete,
+                "backlog_full": backlog_full,
             },
         )
         logger.info(
@@ -198,6 +210,7 @@ class QueueEnqueueService:
             discovered=discovered,
             pages_processed=pages,
             complete=complete,
+            backlog_full=backlog_full,
         )
 
     def _record_failure(
