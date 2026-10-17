@@ -148,9 +148,12 @@ backup exists. Treat a backup as the most sensitive copy of the data.
 | contact | created_at | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | id | PII_INDIRECT | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | legal_hold | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
+| contact | next_retry_at | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | normalized_phone_number | PII_DIRECT | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | phone_number | PII_DIRECT | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | purged_at | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
+| contact | retry_attempt_id | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
+| contact | retry_attempt_number | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | status | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
 | contact | updated_at | NON_PII | CONTACT | `RETENTION_CONTACT_DAYS` |
 | conversation_message | content | PII_CONTENT | TRANSCRIPT | `RETENTION_TRANSCRIPT_DAYS` |

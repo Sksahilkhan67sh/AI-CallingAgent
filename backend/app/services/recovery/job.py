@@ -8,6 +8,10 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
+# Fixed namespace: the same retry always gets the same ids, so scheduling it twice -- or
+# rebuilding it from PostgreSQL after Redis was lost -- yields the SAME ZSET member (P1-2).
+_NS = uuid.UUID("5a1c0de1-0000-4000-8000-00000000f1f2")
+
 
 @dataclass
 class RecoveryJob:
@@ -31,7 +35,7 @@ class RecoveryJob:
         attempt_number: int,
     ) -> "RecoveryJob":
         return cls(
-            job_id=str(uuid.uuid4()),
+            job_id=str(uuid.uuid5(_NS, f"{campaign_id}:{contact_id}:{attempt_number}:job")),
             attempt_id=str(attempt_id),
             contact_id=str(contact_id),
             campaign_id=str(campaign_id),
@@ -39,11 +43,13 @@ class RecoveryJob:
             recovery_type="RECONNECT",
             idempotency_key=f"{campaign_id}:{contact_id}:{attempt_number}",
             scheduled_at=datetime.now(UTC).isoformat(),
-            trace_id=str(uuid.uuid4()),
+            trace_id=str(uuid.uuid5(_NS, f"{campaign_id}:{contact_id}:{attempt_number}:trace")),
         )
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self))
+        # Canonical (sorted keys) and time-free: the due time is the ZSET *score*, so the
+        # member identifies the retry, not when it fires. `scheduled_at` is informational only.
+        return json.dumps({**asdict(self), "scheduled_at": ""}, sort_keys=True)
 
     @classmethod
     def from_json(cls, data: str) -> "RecoveryJob":
