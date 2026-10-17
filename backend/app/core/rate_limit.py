@@ -29,6 +29,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import redis
 from fastapi import Depends, HTTPException, Request, status
@@ -74,7 +75,9 @@ _KEY_PREFIX = "ratelimit:"
 
 
 def _atomic_incr(redis_client: redis.Redis, redis_key: str, window_seconds: int) -> tuple[int, int]:
-    count, ttl = redis_client.eval(_ATOMIC_INCR, 1, redis_key, str(window_seconds))  # type: ignore[misc]
+    # redis-py's stubs type eval() as "str | Awaitable[str]"; it really returns [count, ttl].
+    result: Any = redis_client.eval(_ATOMIC_INCR, 1, redis_key, str(window_seconds))
+    count, ttl = result
     return int(count), int(ttl)
 
 

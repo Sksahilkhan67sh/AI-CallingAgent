@@ -106,7 +106,7 @@ def resolve_target(url: str) -> _Target | None:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError:
         return None
-    addresses = [ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos]
+    addresses = [ipaddress.ip_address(str(info[4][0]).split("%")[0]) for info in infos]
     if not addresses or not all(_allowed_ip(a, trusted) for a in addresses):
         return None
     path = parts.path or "/"
