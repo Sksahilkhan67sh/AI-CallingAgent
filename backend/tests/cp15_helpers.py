@@ -139,4 +139,7 @@ CP15_PRODUCTION_SETTINGS = dict(
     retention_processed_event_days=90,
     retention_run_history_days=365,
     erasure_fingerprint_pepper="Pp9Zk2Lm7Qw4Xr1Ty6Uv3Bn8Cd5Ef0Gh2Jk",
+    # P1-3: production refuses a Redis URL without a password, so every valid production
+    # config must carry one (a placeholder, never a real credential).
+    redis_url="redis://:a-real-redis-pw-4Tz9@redis.example.invalid:6379/0",
 )

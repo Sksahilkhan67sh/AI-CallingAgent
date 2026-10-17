@@ -17,10 +17,20 @@ services:
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
+    # P1-3: AOF with everysec (a crash loses at most about one second of writes), password
+    # required, data on a named volume. The port is NOT published to the host: only services on
+    # the compose network can reach it. REDIS_PASSWORD has no default on purpose.
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD (see .env.example)}
+      - REDISCLI_AUTH=${REDIS_PASSWORD:?set REDIS_PASSWORD (see .env.example)}
+    volumes:
+      - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -34,7 +44,7 @@ services:
     environment:
       - LOG_LEVEL=debug
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
     depends_on:
       db:
         condition: service_healthy
@@ -49,7 +59,7 @@ services:
     environment:
       - LOG_LEVEL=debug
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
     depends_on:
       db:
         condition: service_healthy
@@ -64,7 +74,7 @@ services:
     environment:
       - LOG_LEVEL=debug
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
     depends_on:
       db:
         condition: service_healthy
@@ -82,3 +92,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
