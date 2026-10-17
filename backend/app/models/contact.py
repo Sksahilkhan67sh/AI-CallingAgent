@@ -33,6 +33,12 @@ class Contact(Base):
             "campaign_id", "normalized_phone_number", name="uq_contact_campaign_phone"
         ),
         Index("ix_contact_campaign_status", "campaign_id", "status"),
+        # P1-2: the rebuild scans only contacts that carry a durable retry schedule.
+        Index(
+            "ix_contact_next_retry_at",
+            "next_retry_at",
+            postgresql_where=text("next_retry_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -47,6 +53,12 @@ class Contact(Base):
         default=ContactStatus.PENDING,
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # P1-2: PostgreSQL is the source of truth for a scheduled retry; the Redis ZSET is only a
+    # cache rebuilt from these three columns. Set together by RecoveryManager when a retry is
+    # scheduled; cleared when the dialer claims the retry (contact -> DIALING).
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_attempt_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    retry_attempt_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # CP15: legal hold blocks every retention/erasure action on this contact's data.
     legal_hold: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

@@ -65,16 +65,22 @@ def _seed(engine) -> uuid.UUID:
         campaign = Campaign(name="pre-hf1", status=CampaignStatus.ACTIVE)
         s.add(campaign)
         s.flush()
-        contact = Contact(
-            campaign_id=campaign.id,
-            phone_number="+919800000001",
-            normalized_phone_number="+919800000001",
-            status=ContactStatus.PENDING,
+        # Core insert with explicit columns: the ORM model knows columns added by later
+        # migrations (P1-2) that this pre-HF1 schema does not have yet.
+        contact_id = uuid.uuid4()
+        s.execute(
+            Contact.__table__.insert().values(
+                id=contact_id,
+                campaign_id=campaign.id,
+                phone_number="+919800000001",
+                normalized_phone_number="+919800000001",
+                status=ContactStatus.PENDING,
+                attempt_count=0,
+            )
         )
-        s.add(contact)
         s.flush()
         attempt = CallAttempt(
-            contact_id=contact.id, attempt_number=1, state=CallAttemptState.INITIATED
+            contact_id=contact_id, attempt_number=1, state=CallAttemptState.INITIATED
         )
         s.add(attempt)
         s.flush()
@@ -84,7 +90,7 @@ def _seed(engine) -> uuid.UUID:
         analysis = CallAnalysis(
             call_attempt_id=attempt.id,
             conversation_session_id=session.id,
-            contact_id=contact.id,
+            contact_id=contact_id,
             campaign_id=campaign.id,
         )
         s.add(analysis)
@@ -101,7 +107,8 @@ def _analysis_index_exists(engine) -> bool:
 
 def test_there_is_exactly_one_head_and_it_is_the_hf1_revision():
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert script.get_heads() == [HF1_REV]
+    assert len(script.get_heads()) == 1  # later migrations (P1-2) may sit above HF1
+    assert script.get_revision(HF1_REV) is not None
     assert script.get_revision(HF1_REV).down_revision == PRE_HF1
 
 

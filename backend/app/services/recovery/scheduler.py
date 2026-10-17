@@ -37,6 +37,19 @@ class RecoveryScheduler:
         member = json.dumps({"kind": DIAL_JOB_KIND, **asdict(job)}, sort_keys=True)
         self.redis.zadd(_SCHEDULE_KEY, {member: due_at.timestamp()})
 
+    def add_missing(self, entries: dict[str, float]) -> int:
+        """ZADD NX in one round trip: adds only members that are not already scheduled and never
+        touches an existing score. Returns how many were added (P1-2 rebuild)."""
+        if not entries:
+            return 0
+        added: int = self.redis.zadd(_SCHEDULE_KEY, entries, nx=True)  # type: ignore[assignment]
+        return added
+
+    def put_back(self, job_json: str, due_at: datetime) -> bool:
+        """Re-add a claimed entry only if it is missing (ZADD NX). If processing already moved it
+        (a pause / window re-check) that later due time is kept, never overwritten."""
+        return self.add_missing({job_json: due_at.timestamp()}) == 1
+
     def reschedule(self, job_json: str, due_at: datetime) -> None:
         """Used by the dispatcher when a due job is re-checked and found
         not-yet-dialable (paused campaign, closed calling window) --

@@ -15,8 +15,10 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -41,6 +43,8 @@ logger = logging.getLogger("recovery.dispatch")
 
 _ACTOR = "recovery-dispatcher"
 PAUSE_RECHECK_SECONDS = 60  # Step 11 -- how soon to re-check a paused campaign
+# P1-2: when processing a claimed entry fails, put it back this far ahead instead of dropping it.
+DISPATCH_ERROR_RETRY_SECONDS = 30
 
 
 def dispatch_due_recovery_jobs(
@@ -71,6 +75,13 @@ def dispatch_due_recovery_jobs(
         except Exception:
             db.rollback()
             logger.exception("recovery_dispatch_error", extra={"job": job_json})
+            # The entry was claimed (ZREM) above. Put it back: losing it would strand the contact.
+            # (If even this fails, the Postgres schedule + worker rebuild restore it.)
+            try:
+                put_back_at = now + timedelta(seconds=DISPATCH_ERROR_RETRY_SECONDS)
+                scheduler.put_back(job_json, put_back_at)
+            except RedisError:
+                logger.exception("recovery_dispatch_putback_failed", extra={"job": job_json})
         finally:
             db.close()
 
@@ -94,21 +105,26 @@ def _process_one(
     if contact.status == ContactStatus.CLOSED or suppressions.is_suppressed(
         contact.normalized_phone_number
     ):
+        _clear_schedule(contact)
         _log_skip(db, job, "suppressed")
         return 0
 
     if campaign.status == CampaignStatus.COMPLETED:
+        _clear_schedule(contact)
         _log_skip(db, job, "campaign_completed")
         return 0
 
     if campaign.status == CampaignStatus.PAUSED:
-        scheduler.reschedule(job.to_json(), now + timedelta(seconds=PAUSE_RECHECK_SECONDS))
+        due = now + timedelta(seconds=PAUSE_RECHECK_SECONDS)
+        scheduler.reschedule(job.to_json(), due)
+        contact.next_retry_at = due
         _log_skip(db, job, "campaign_paused", rescheduled=True)
         return 0
 
     window_check = _next_window_time(campaign, get_effective_policy(db, campaign), now)
     if window_check is not None:
         scheduler.reschedule(job.to_json(), window_check)
+        contact.next_retry_at = window_check
         _log_skip(db, job, "calling_window_closed", rescheduled=True)
         return 0
 
@@ -119,6 +135,7 @@ def _process_one(
         contact.id, job.attempt_number
     )
     if existing is not None:
+        _clear_schedule(contact)
         _log_skip(db, job, "attempt_already_exists")
         return 0
 
@@ -129,7 +146,25 @@ def _process_one(
         recovery_type=job.recovery_type,
         previous_attempt_id=job.attempt_id,
     )
-    queue.enqueue(dial_job)
+    # enqueue_once: a replayed or rebuilt entry for the same attempt number finds the guard and
+    # adds nothing, so one retry is one dial job (the dialer's UNIQUE(contact, attempt) is the
+    # second line). A full stream pushes the entry back instead of dropping it (P1-1).
+    try:
+        queued = queue.enqueue_once(
+            dial_job, enqueue_guard_key(dial_job.idempotency_key), ENQUEUE_GUARD_TTL_SECONDS
+        )
+    except QueueBacklogFull:
+        due = now + timedelta(seconds=PAUSE_RECHECK_SECONDS)
+        scheduler.reschedule(job.to_json(), due)
+        contact.next_retry_at = due
+        return 0
+
+    # Handed to the dial stream, but the contact stays RETRY_SCHEDULED until the dialer claims it.
+    # If that never happens (the job was lost), this later due time makes the rebuild re-dispatch.
+    contact.next_retry_at = now + timedelta(seconds=get_settings().retry_redispatch_seconds)
+    if not queued:
+        _log_skip(db, job, "already_queued")
+        return 0
 
     db.add(
         CallEvent(
@@ -148,6 +183,13 @@ def _process_one(
     )
     db.flush()
     return 1
+
+
+def _clear_schedule(contact: Contact) -> None:
+    """This retry will not run (terminal skip): nothing left for the rebuild to restore."""
+    contact.next_retry_at = None
+    contact.retry_attempt_id = None
+    contact.retry_attempt_number = None
 
 
 def _log_skip(db: Session, job: RecoveryJob, reason: str, *, rescheduled: bool = False) -> None:

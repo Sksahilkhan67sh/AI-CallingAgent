@@ -98,6 +98,14 @@ class Settings(BaseSettings):
     # it stops and leaves the rest PENDING in PostgreSQL; nothing is ever trimmed. One entry is
     # about 511 bytes in Redis, so the default bounds the stream near 100 MB.
     queue_max_backlog: int = 200_000
+    # P1-2: the Redis retry schedule is a cache of PostgreSQL (contact.next_retry_at). Workers
+    # rebuild any missing entries at start and then every `retry_rebuild_interval_seconds`
+    # (page size `retry_rebuild_batch_size`). Once a retry is handed to the dial stream its
+    # Postgres due time moves `retry_redispatch_seconds` ahead, so a dial job that was lost
+    # (e.g. Redis wiped) is re-dispatched if the contact is still RETRY_SCHEDULED by then.
+    retry_rebuild_interval_seconds: int = 60
+    retry_rebuild_batch_size: int = 500
+    retry_redispatch_seconds: int = 900
 
     # Telephony provider selection -- "mock" is the only supported value
     # until real provider credentials exist (see
@@ -517,6 +525,9 @@ class Settings(BaseSettings):
             "dograh_transcript_max_bytes",
             "dograh_transcript_max_lines",
             "queue_max_backlog",
+            "retry_rebuild_interval_seconds",
+            "retry_rebuild_batch_size",
+            "retry_redispatch_seconds",
         ):
             if getattr(self, name) <= 0:
                 problems.append(f"{name.upper()} must be > 0")

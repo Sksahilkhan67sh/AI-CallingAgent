@@ -9,6 +9,7 @@ Run with: python -m app.worker
 import logging
 import signal
 import socket
+import time
 import uuid
 from datetime import UTC, datetime
 from types import FrameType
@@ -34,6 +35,18 @@ _shutdown_requested = False
 # jobs that have come due -- not on every iteration, same reasoning as
 # the existing stale-job-reclaim cadence below.
 _RECOVERY_DISPATCH_EVERY_N_ITERATIONS = 10
+
+
+def _rebuild_retry_schedule() -> None:
+    """P1-2: restore any retry missing from the Redis cache from PostgreSQL. Never fatal."""
+    try:
+        from app.services.recovery.rebuild import rebuild_retry_schedule
+
+        restored = rebuild_retry_schedule(SessionLocal, get_recovery_scheduler())
+        if restored:
+            logger.warning("retry_schedule_rebuilt", extra={"restored": restored})
+    except Exception:
+        logger.exception("retry_schedule_rebuild_failed")
 
 
 def _write_heartbeat() -> None:
@@ -75,10 +88,18 @@ def run() -> None:
     logger.info("worker_started", extra={"consumer_name": consumer_name})
 
     reclaim_counter = 0
+    from app.core.config import get_settings
+
+    _rebuild_retry_schedule()  # at start: a Redis that came back empty is repaired before work
+    last_rebuild = time.monotonic()
     try:
         while not _shutdown_requested:
             db = SessionLocal()
             try:
+                if time.monotonic() - last_rebuild >= get_settings().retry_rebuild_interval_seconds:
+                    last_rebuild = time.monotonic()
+                    _rebuild_retry_schedule()
+
                 # Periodically reclaim jobs left stale by a crashed
                 # worker (Step 21-22), not on every loop iteration.
                 reclaim_counter += 1

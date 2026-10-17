@@ -569,6 +569,10 @@ def _dial(
     if created:
         contact.attempt_count += 1
     contact.status = ContactStatus.DIALING
+    # P1-2: the retry (if this was one) is now claimed; nothing is left to rebuild or re-dispatch.
+    contact.next_retry_at = None
+    contact.retry_attempt_id = None
+    contact.retry_attempt_number = None
     db.flush()
 
     outcome = _place_call(db, provider, circuit_breaker, contact, attempt, job, prior=prior)

@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -184,9 +185,21 @@ class RecoveryManager:
             attempt_number=decision.next_attempt_number,
         )
         due_at = datetime.now(UTC) + timedelta(seconds=decision.delay_seconds)
-        self.scheduler.schedule(job, due_at)
 
+        # P1-2: PostgreSQL is the source of truth for the retry; it commits with the rest of this
+        # transaction. The Redis entry is a cache of it, so a Redis outage here must not fail
+        # (and roll back) the state change -- the worker's rebuild restores the entry.
         contact.status = ContactStatus.RETRY_SCHEDULED
+        contact.next_retry_at = due_at
+        contact.retry_attempt_id = call_attempt.id
+        contact.retry_attempt_number = decision.next_attempt_number
+        try:
+            self.scheduler.schedule(job, due_at)
+        except RedisError:
+            logger.exception(
+                "retry_schedule_cache_write_failed",
+                extra={"contact_id": str(contact.id), "rebuild": "from_postgres"},
+            )
 
         self._log_event(
             call_attempt,

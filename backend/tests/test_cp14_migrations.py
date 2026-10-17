@@ -226,7 +226,7 @@ def test_a_single_head_and_the_step_between_is_reversible(scratch):
     # CP14B intentionally moved the head to a83d13f0c415 (its additive migration) and CP15A
     # to c15a1b2c3d4e, HF1 to e2d1c0b9a8f7. Still a SINGLE head, and each checkpoint's migration
     # must remain the direct child of the previous one (chain intact).
-    assert scripts.get_heads() == ["e2d1c0b9a8f7"]
+    assert len(scripts.get_heads()) == 1  # a later migration may sit above HF1 (P1-2)
     assert scripts.get_revision("e2d1c0b9a8f7").down_revision == "c15a1b2c3d4e"
     assert scripts.get_revision("c15a1b2c3d4e").down_revision == "a83d13f0c415"
     assert scripts.get_revision("a83d13f0c415").down_revision == "c14b4e5f6a7b"
