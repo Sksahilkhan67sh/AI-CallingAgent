@@ -10,3 +10,4 @@ F7 [RAN] Docker builds not verified (no Docker in sandbox).
 F8 [READ] Dograh webhook writes transcript lines into conversation_message (dograh_webhook_service.py:168-183): transcript retention and erasure apply to Dograh calls; Dograh-side copies are not deletable (CHECKPOINT-15A-NOTES.md:102).
 F9 [READ] backend/.env.example:143 says retention settings must be left unset, not written empty; an empty RETENTION_X= line in .env may be invalid for an int field [ASSUMED, not run].
 F10 [READ] Past decision exists: CP11 chose single-tenant (CHECKPOINT-11-NOTES.md:13-14). Resource-level authorization is 'none' for all 36 routes; any login sees all data.
+F11 [RAN] No AI-disclosure, breach-notification or caller-ID code found; registry (NDNC\/DND) scrubbing explicitly not implemented (suppression_service.py:7-8).

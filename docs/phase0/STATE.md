@@ -8,5 +8,5 @@
 | P0-4 | Decision A | DONE (owner decision pending) | 04-decision-A.md | 4 |
 | P0-5 | Decision B | DONE (owner decision pending) | 05-decision-B.md | 5 |
 | P0-6 | Decision C | DONE (owner decision pending) | 06-decision-C.md | 6 |
-| P0-7 | Legal brief | TODO | 07-legal-brief.md | - |
+| P0-7 | Legal brief | DONE (owner must send) | 07-legal-brief.md | 7 |
 | P0-8 | Phase 1 readiness | TODO | 08-phase1-readiness.md | - |
