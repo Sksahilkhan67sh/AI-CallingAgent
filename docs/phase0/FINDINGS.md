@@ -8,6 +8,6 @@ F5 [READ] ci.yml runs tests/ops without installing `age`; ~43 drill/safety tests
 F6 [RAN] ops/backup/drill.sh re-execs as the `postgres` user when run as root; fails with exit 126 if that user cannot read the repo/python. Affects anyone running drills in containers as root.
 F7 [RAN] Docker builds not verified (no Docker in sandbox).
 F8 [READ] Dograh webhook writes transcript lines into conversation_message (dograh_webhook_service.py:168-183): transcript retention and erasure apply to Dograh calls; Dograh-side copies are not deletable (CHECKPOINT-15A-NOTES.md:102).
-F9 [READ] backend/.env.example:143 says retention settings must be left unset, not written empty; an empty RETENTION_X= line in .env may be invalid for an int field [ASSUMED, not run].
+F9 [RAN] An empty `RETENTION_TRANSCRIPT_DAYS=` in the environment makes `Settings()` raise a ValidationError (checked on Python 3.11.15). Retention lines must be absent or a number; this is why 05-decision-B.md uses commented lines.
 F10 [READ] Past decision exists: CP11 chose single-tenant (CHECKPOINT-11-NOTES.md:13-14). Resource-level authorization is 'none' for all 36 routes; any login sees all data.
 F11 [RAN] No AI-disclosure, breach-notification or caller-ID code found; registry (NDNC\/DND) scrubbing explicitly not implemented (suppression_service.py:7-8).
