@@ -383,7 +383,8 @@ def test_concurrent_dials_overshoot_by_at_most_the_number_in_flight(
     assert dialed <= headroom + workers  # ...and overshoot never exceeded the documented bound
     untouched = sum(1 for c in ids if not attempts_of(c))
     assert untouched == jobs - dialed  # every job that was not dialed is still queued, intact
-    assert redis_client.xlen(queue.stream_key) == jobs
+    # acked (dialed) entries leave the stream (P1-1), so exactly the undialed jobs remain
+    assert redis_client.xlen(queue.stream_key) == untouched
 
 
 # -- audit and log throttling ---------------------------------------------------------------------

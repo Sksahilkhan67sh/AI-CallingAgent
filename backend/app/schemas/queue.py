@@ -17,3 +17,6 @@ class EnqueueResult(BaseModel):
     # False only when the per-request cap stopped the run with eligible contacts left:
     # call enqueue again (idempotent) to continue.
     complete: bool = True
+    # P1-1: True when the run stopped because the dial stream is at QUEUE_MAX_BACKLOG. The
+    # contacts not yet queued are still PENDING; enqueue again once workers have drained it.
+    backlog_full: bool = False
