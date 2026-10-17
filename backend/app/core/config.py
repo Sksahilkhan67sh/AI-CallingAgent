@@ -23,6 +23,15 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
+
+
+def _redis_url_has_password(url: str) -> bool:
+    """True when the URL carries a non-empty password (`redis://:pw@host`, `rediss://user:pw@host`).
+    A username alone, or an empty password, is not authentication."""
+    try:
+        return bool(urlparse(url).password)
+    except ValueError:
+        return False
 _CALLING_ENGINES = frozenset({"native", "dograh"})
 _MAX_ENQUEUE_PAGE_SIZE = 5_000
 _DOGRAH_TRIGGER_MODES = frozenset({"test", "production"})
@@ -661,6 +670,13 @@ class Settings(BaseSettings):
                 problems.append(
                     "ADMIN_USERNAME and OPERATOR_USERNAME must differ "
                     "(audit events and rate limits are attributed by username)"
+                )
+
+            # P1-3: Redis holds the dial queue, the retry cache and live counters. Never open.
+            if not _redis_url_has_password(self.redis_url):
+                problems.append(
+                    "REDIS_URL must carry a password (redis://:<password>@host:6379/0) when "
+                    "ENVIRONMENT=production; an unauthenticated Redis exposes the dial queue"
                 )
 
             if any(origin.strip() == "*" for origin in self.admin_cors_origins):

@@ -6,8 +6,8 @@ Integration branch: `main` (`develop` does not contain `main`). Labels: [RAN] / 
 |---|---|---|---|---|---|
 | P1-0 | Recon | MERGED | #73 | `00-recon.md`; baseline 1730 passed, 1 skipped [RAN] | 1 |
 | P1-1 | Stream trim drops undelivered jobs | MERGED | #75 | 49,995 / 250,000 lost before; 0 lost after at 250k [RAN]; suite 1736 passed, 1 skipped | 2 |
-| P1-2 | Durable retry schedule in Postgres | PR-OPEN | #76 | 8/8 new tests failed before (retry lost `0 == 1`, double dispatch) [RAN] | 3 |
-| P1-3 | Redis durability and auth | TODO | | | |
+| P1-2 | Durable retry schedule in Postgres | MERGED | #76 | 8/8 new tests failed before (retry lost `0 == 1`, double dispatch) [RAN] | 3 |
+| P1-3 | Redis durability and auth | DOING | | 10/15 new tests failed before [RAN]; drill PASS graceful+crash on real redis-server 7.0.15 with the compose flags [RAN]; compose drill HUMAN-TODO (no Docker) | 4 |
 | P1-4 | Stuck-call sweeper | TODO | | | |
 | P1-5 | Dead-letter handling | TODO | | | |
 | P1-6 | Reclaim cadence and per-job deadline | TODO | | | |
