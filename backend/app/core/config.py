@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     # it stops and leaves the rest PENDING in PostgreSQL; nothing is ever trimmed. One entry is
     # about 511 bytes in Redis, so the default bounds the stream near 100 MB.
     queue_max_backlog: int = 200_000
+    # P1-5: a message delivered more than this many times without being settled or deliberately
+    # held (campaign paused, outbound frozen, window closed, call in flight) is poison: it is moved
+    # to the `<stream>:dlq` stream with its reason and original payload. Each reclaim cycle is one
+    # delivery, so this is also how long a transient failure (database down) keeps being retried.
+    queue_max_deliveries: int = 10
     # P1-2: the Redis retry schedule is a cache of PostgreSQL (contact.next_retry_at). Workers
     # rebuild any missing entries at start and then every `retry_rebuild_interval_seconds`
     # (page size `retry_rebuild_batch_size`). Once a retry is handed to the dial stream its
@@ -540,6 +545,7 @@ class Settings(BaseSettings):
             "dograh_transcript_max_bytes",
             "dograh_transcript_max_lines",
             "queue_max_backlog",
+            "queue_max_deliveries",
             "retry_rebuild_interval_seconds",
             "retry_rebuild_batch_size",
             "retry_redispatch_seconds",
