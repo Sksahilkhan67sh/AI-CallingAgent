@@ -112,6 +112,13 @@ class Settings(BaseSettings):
     # to the `<stream>:dlq` stream with its reason and original payload. Each reclaim cycle is one
     # delivery, so this is also how long a transient failure (database down) keeps being retried.
     queue_max_deliveries: int = 10
+    # P1-6: how often (wall-clock seconds, +/- jitter) a worker reclaims jobs a dead worker left
+    # pending, and how long one job may run before it is abandoned. The deadline must be SHORTER
+    # than queue_reclaim_idle_ms so a job is always finished or abandoned before any other worker
+    # can reclaim it (validated). 0 disables the deadline.
+    queue_reclaim_interval_seconds: float = 15.0
+    queue_reclaim_jitter_ratio: float = 0.2
+    job_deadline_seconds: int = 25
     # P1-2: the Redis retry schedule is a cache of PostgreSQL (contact.next_retry_at). Workers
     # rebuild any missing entries at start and then every `retry_rebuild_interval_seconds`
     # (page size `retry_rebuild_batch_size`). Once a retry is handed to the dial stream its
@@ -528,6 +535,23 @@ class Settings(BaseSettings):
             problems.append(
                 "CONCURRENCY_LEASE_TTL_SECONDS must exceed 3 x (DOGRAH_CONNECT_TIMEOUT_SECONDS "
                 f"+ DOGRAH_READ_TIMEOUT_SECONDS) = {longest_dial:g}s"
+            )
+
+        # P1-6: cadence and per-job deadline.
+        if self.queue_reclaim_interval_seconds <= 0:
+            problems.append("QUEUE_RECLAIM_INTERVAL_SECONDS must be > 0")
+        if not 0 <= self.queue_reclaim_jitter_ratio < 1:
+            problems.append("QUEUE_RECLAIM_JITTER_RATIO must be >= 0 and < 1")
+        if self.job_deadline_seconds < 0:
+            problems.append("JOB_DEADLINE_SECONDS must be >= 0 (0 disables the deadline)")
+        elif (
+            self.job_deadline_seconds
+            and self.job_deadline_seconds * 1000 >= self.queue_reclaim_idle_ms
+        ):
+            problems.append(
+                "JOB_DEADLINE_SECONDS must be shorter than QUEUE_RECLAIM_IDLE_MS "
+                f"({self.queue_reclaim_idle_ms} ms): otherwise another worker can reclaim a "
+                "job that is still running"
             )
 
         # CP11: a zero/negative cap would make a safety limit reject (or divide) everything.
