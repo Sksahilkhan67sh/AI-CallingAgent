@@ -14,4 +14,13 @@ from app.core.config import get_settings
 @lru_cache
 def get_redis() -> redis.Redis:
     settings = get_settings()
-    return redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    # P1-7: explicit timeouts. Without them a stalled Redis (a dropped connection that never
+    # resets, a frozen process) blocks the calling thread for ever -- and every worker, the
+    # API and the sweeper share this client.
+    return redis.Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=settings.redis_socket_connect_timeout_seconds,
+        socket_timeout=settings.redis_socket_timeout_seconds,
+        health_check_interval=settings.redis_health_check_interval_seconds,
+    )

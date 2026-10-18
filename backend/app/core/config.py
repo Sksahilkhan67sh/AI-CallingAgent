@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # it stops and leaves the rest PENDING in PostgreSQL; nothing is ever trimmed. One entry is
     # about 511 bytes in Redis, so the default bounds the stream near 100 MB.
     queue_max_backlog: int = 200_000
+    # P1-7: explicit Redis socket timeouts (never block forever on a stalled Redis). The socket
+    # timeout must exceed the 1 s blocking stream read workers use (validated, >= 2 s).
+    redis_socket_connect_timeout_seconds: float = 5.0
+    redis_socket_timeout_seconds: float = 10.0
+    redis_health_check_interval_seconds: int = 30
+    # P1-7: the transcript download talks to whatever host Dograh's webhook names; its own
+    # bounded connect/read timeouts (write and pool phases use the connect timeout).
+    dograh_transcript_connect_timeout_seconds: float = 5.0
+    dograh_transcript_read_timeout_seconds: float = 10.0
     # P1-5: a message delivered more than this many times without being settled or deliberately
     # held (campaign paused, outbound frozen, window closed, call in flight) is poison: it is moved
     # to the `<stream>:dlq` stream with its reason and original payload. Each reclaim cycle is one
@@ -536,6 +545,23 @@ class Settings(BaseSettings):
                 "CONCURRENCY_LEASE_TTL_SECONDS must exceed 3 x (DOGRAH_CONNECT_TIMEOUT_SECONDS "
                 f"+ DOGRAH_READ_TIMEOUT_SECONDS) = {longest_dial:g}s"
             )
+
+        # P1-7: every outbound timeout is explicit and positive.
+        for name in (
+            "redis_socket_connect_timeout_seconds",
+            "redis_socket_timeout_seconds",
+            "dograh_transcript_connect_timeout_seconds",
+            "dograh_transcript_read_timeout_seconds",
+        ):
+            if getattr(self, name) <= 0:
+                problems.append(f"{name.upper()} must be > 0")
+        if 0 < self.redis_socket_timeout_seconds < 2.0:
+            problems.append(
+                "REDIS_SOCKET_TIMEOUT_SECONDS must be >= 2: workers block up to 1 s on the "
+                "stream read and a shorter socket timeout would abort every idle poll"
+            )
+        if self.redis_health_check_interval_seconds < 0:
+            problems.append("REDIS_HEALTH_CHECK_INTERVAL_SECONDS must be >= 0")
 
         # P1-6: cadence and per-job deadline.
         if self.queue_reclaim_interval_seconds <= 0:

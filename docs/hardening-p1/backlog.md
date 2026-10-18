@@ -7,3 +7,5 @@
 - (P1-5) If PostgreSQL is down when a message is dead-lettered, the contact is not marked `NeedsReview` (the DLQ stream is the durable record); the contact stays PENDING behind its 1 h enqueue guard.
 - (P1-6) Recovery dispatch is still every 10 loop iterations (`_RECOVERY_DISPATCH_EVERY_N_ITERATIONS`), so a busy worker dispatches due retries less often. No loss (the schedule is durable, P1-2); make it time-based if retry latency under load matters.
 - (P1-6) `JOB_DEADLINE_SECONDS` uses SIGALRM, so it only works in the main thread of a POSIX process (the worker loop). Elsewhere it is a no-op.
+- (P1-7) Database statement and lock timeouts are Phase 2 by decision and were not touched.
+- (P1-7) The guard (`tests/test_p1_7_timeouts.py`) covers `httpx`, `redis`, `socket.create_connection`, `urllib.request.urlopen`, `http.client`, `smtplib` and flags any import of `requests`, `aiohttp` or `urllib3`. A new client type must be added to it.

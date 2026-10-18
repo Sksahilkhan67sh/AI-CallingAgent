@@ -41,7 +41,6 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PORTS = {"https": 443, "http": 80}
-_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 _TOTAL_DEADLINE_SECONDS = 20.0
 # Plausible content types for a JSON export. text/plain and octet-stream are
 # included because object stores commonly serve JSON that way; HTML, images etc.
@@ -120,6 +119,19 @@ def _is_json_content_type(header: str | None) -> bool:
     return media_type in _ALLOWED_CONTENT_TYPES or media_type.endswith("+json")
 
 
+def _timeout() -> httpx.Timeout:
+    """Bounded connect and read timeouts from settings (P1-7); a slow write or an exhausted pool
+    is the same "give up fast" case as a slow connect, so those phases use the connect timeout."""
+    settings = get_settings()
+    connect = settings.dograh_transcript_connect_timeout_seconds
+    return httpx.Timeout(
+        connect=connect,
+        read=settings.dograh_transcript_read_timeout_seconds,
+        write=connect,
+        pool=connect,
+    )
+
+
 def _download(target: _Target) -> bytes | None:
     settings = get_settings()
     max_bytes = settings.dograh_transcript_max_bytes
@@ -131,7 +143,7 @@ def _download(target: _Target) -> bytes | None:
     deadline = time.monotonic() + _TOTAL_DEADLINE_SECONDS
 
     with (
-        httpx.Client(timeout=_TIMEOUT, follow_redirects=False, trust_env=False) as client,
+        httpx.Client(timeout=_timeout(), follow_redirects=False, trust_env=False) as client,
         client.stream(
             "GET", connect_url, headers={"Host": host_header}, extensions=extensions
         ) as response,
