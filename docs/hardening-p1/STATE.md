@@ -10,7 +10,7 @@ Integration branch: `main` (`develop` does not contain `main`). Labels: [RAN] / 
 | P1-3 | Redis durability and auth | MERGED | #77 | 10/15 new tests failed before [RAN]; drill PASS graceful+crash on real redis-server 7.0.15 with the compose flags [RAN]; compose drill HUMAN-TODO (no Docker) | 4 |
 | P1-4 | Stuck-call sweeper | MERGED | #78 | stuck state reproduced at 3 death points on unfixed code; 13 sweeper tests failed (no module) [RAN]; 16 pass incl. faketime x3 | 5 |
 | P1-5 | Dead-letter handling | MERGED | #79 | poison/malformed behaviour reproduced on unfixed code [RAN]; 9 tests pass incl. faketime x3; suite 1788 passed | 6 |
-| P1-6 | Reclaim cadence and per-job deadline | DOING | | 12/12 new tests error on unfixed code, pass after incl. faketime x3 [RAN]; suite 1800 passed | 7 |
+| P1-6 | Reclaim cadence and per-job deadline | PR-OPEN | #81 | 12/12 new tests error on unfixed code, pass after incl. faketime x3 [RAN]; suite 1800 passed | 7 |
 | P1-7 | Explicit timeouts everywhere | TODO | | | |
 | P1-8 | Transcript missing vs empty | TODO | | | |
 | P1-9 | Verified logic bugs | TODO | | | |
