@@ -11,7 +11,7 @@ Integration branch: `main` (`develop` does not contain `main`). Labels: [RAN] / 
 | P1-4 | Stuck-call sweeper | MERGED | #78 | stuck state reproduced at 3 death points on unfixed code; 13 sweeper tests failed (no module) [RAN]; 16 pass incl. faketime x3 | 5 |
 | P1-5 | Dead-letter handling | MERGED | #79 | poison/malformed behaviour reproduced on unfixed code [RAN]; 9 tests pass incl. faketime x3; suite 1788 passed | 6 |
 | P1-6 | Reclaim cadence and per-job deadline | MERGED | #81 | 12/12 new tests error on unfixed code, pass after incl. faketime x3 [RAN]; suite 1800 passed | 7 |
-| P1-7 | Explicit timeouts everywhere | DOING | | AST guard found 3 real violations on unfixed code (redis_client.py:17 x2, transcript_fetch.py:44) [RAN]; 33 tests pass incl. faketime x3; suite 1833 passed | 8 |
+| P1-7 | Explicit timeouts everywhere | PR-OPEN | #82 | AST guard found 3 real violations on unfixed code (redis_client.py:17 x2, transcript_fetch.py:44) [RAN]; 33 tests pass incl. faketime x3; suite 1833 passed | 8 |
 | P1-8 | Transcript missing vs empty | TODO | | | |
 | P1-9 | Verified logic bugs | TODO | | | |
 | P1-10 | Failure-injection gate | TODO | | | |
