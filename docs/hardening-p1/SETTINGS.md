@@ -15,3 +15,8 @@
 | `QUEUE_RECLAIM_INTERVAL_SECONDS` | 15 | P1-6 | Wall-clock seconds between reclaims of a dead worker's pending jobs (replaces "every 50 iterations"). Worst-case wait for a stranded job is this plus `QUEUE_RECLAIM_IDLE_MS` plus one job. |
 | `QUEUE_RECLAIM_JITTER_RATIO` | 0.2 | P1-6 | +/- fraction applied to the interval so a fleet does not reclaim in lockstep. Keep 0.1 to 0.3. |
 | `JOB_DEADLINE_SECONDS` | 25 | P1-6 | Abandon any one job after this long. Must be shorter than `QUEUE_RECLAIM_IDLE_MS / 1000` (validated). A worst-case dial (trigger + two lookups) can take up to 3 x (connect + read) = 60 s; if you need to allow that, raise `QUEUE_RECLAIM_IDLE_MS` first, then the deadline. 0 disables. |
+| `REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS` | 5 | P1-7 | Connect timeout for every Redis client (the app builds exactly one, `get_redis()`). Keep 2 to 5. |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` | 10 | P1-7 | Read/write timeout. Must be >= 2 (workers block 1 s on the stream read; validated). |
+| `REDIS_HEALTH_CHECK_INTERVAL_SECONDS` | 30 | P1-7 | Idle connections are PINGed this often so a dead connection is replaced, not reused. 0 disables. |
+| `DOGRAH_TRANSCRIPT_CONNECT_TIMEOUT_SECONDS` | 5 | P1-7 | Transcript download connect timeout (write and pool phases use it too). Was hard-coded. |
+| `DOGRAH_TRANSCRIPT_READ_TIMEOUT_SECONDS` | 10 | P1-7 | Transcript download read timeout. Was hard-coded. The existing 20 s total deadline still applies. |
