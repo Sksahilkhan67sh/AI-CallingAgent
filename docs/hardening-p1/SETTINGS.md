@@ -11,3 +11,4 @@
 | `SWEEPER_STUCK_AFTER_SECONDS` | 3600 | P1-4 | Must exceed the longest legitimate call plus webhook delay, or live calls are flagged. Keep it well above Dograh's max call duration. |
 | `SWEEPER_INTERVAL_SECONDS` | 60 | P1-4 | Keep 60; each pass is one indexed, batch-limited query. |
 | `SWEEPER_BATCH_LIMIT` | 100 | P1-4 | Rows locked per page; the process loops until a page is empty. |
+| `QUEUE_MAX_DELIVERIES` | 10 | P1-5 | Deliveries (reclaim cycles) before a never-settled job is dead-lettered. Higher = a long database outage keeps being retried; lower = poison is isolated sooner. Deliberate holds do not count. |

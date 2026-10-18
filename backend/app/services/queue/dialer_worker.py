@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
@@ -45,7 +46,7 @@ from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
 from app.services.queue.enqueue_service import enqueue_guard_key
 from app.services.queue.job import DialJob
-from app.services.queue.redis_queue import RedisStreamQueue
+from app.services.queue.redis_queue import DeadLetter, RedisStreamQueue
 from app.services.recovery.factory import get_recovery_scheduler
 from app.services.recovery.job import RecoveryJob
 from app.services.recovery.manager import RecoveryManager
@@ -189,11 +190,100 @@ def process_one_job(
         return _gate_outcome(db, reason)
 
     read = queue.read_one(consumer_name, block_ms)
+    handle_dead_letters(db, queue)  # anything the read moved to the DLQ (unreadable payloads)
     if read is None:
         return JobOutcome.NO_JOB
 
     message_id, job = read
     return process_claimed_job(db, queue, admission, provider, circuit_breaker, message_id, job)
+
+
+DLQ_ACTOR = "dead-letter-handler"
+DLQ_AUDIT_ACTION = "queue.dead_lettered"
+# Only a contact that has not started dialing is parked: a DIALING contact has an attempt in
+# flight, which the stuck-call sweeper owns.
+_PARKABLE = (ContactStatus.PENDING, ContactStatus.RETRY_SCHEDULED)
+
+
+def handle_dead_letters(db: Session, queue: RedisStreamQueue) -> int:
+    """Record, in PostgreSQL, every message the queue just moved to the dead-letter stream:
+    an audit event for each, and its contact set to NEEDS_REVIEW (never dialed automatically,
+    never re-enqueued) unless a call is already in flight. The DLQ stream is the durable record;
+    a failure here is logged and never raised, so it cannot block the loop."""
+    letters = queue.drain_dead_letters()
+    for letter in letters:
+        try:
+            _record_dead_letter(db, letter)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("dead_letter_record_failed", extra={"message_id": letter.message_id})
+    return len(letters)
+
+
+def _record_dead_letter(db: Session, letter: DeadLetter) -> None:
+    metadata: dict[str, object] = {
+        "reason": letter.reason,
+        "message_id": letter.message_id,
+        "times_delivered": letter.times_delivered,
+        "dlq_stream": queue_dlq_key(),
+    }
+    entity_type, entity_id = "queue_message", None
+    if letter.job is not None:
+        contact = db.get(Contact, uuid.UUID(letter.job.contact_id))
+        metadata["attempt_number"] = letter.job.attempt_number
+        if contact is not None:
+            entity_type, entity_id = "contact", contact.id
+            metadata["previous_status"] = contact.status.value
+            if contact.status in _PARKABLE:
+                contact.status = ContactStatus.NEEDS_REVIEW
+                # A retry that can never run must not be rebuilt into the schedule (P1-2).
+                contact.next_retry_at = None
+                contact.retry_attempt_id = None
+                contact.retry_attempt_number = None
+    record_audit_event(
+        db,
+        actor=DLQ_ACTOR,
+        action=DLQ_AUDIT_ACTION,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        metadata=metadata,
+    )
+
+
+def queue_dlq_key() -> str:
+    return f"{get_settings().queue_stream_key}:dlq"
+
+
+def reclaim_and_redrive(
+    db: Session,
+    queue: RedisStreamQueue,
+    admission: AdmissionController,
+    provider: TelephonyProvider,
+    circuit_breaker: CircuitBreaker,
+    consumer_name: str,
+) -> int:
+    """Claim jobs another consumer left pending for `queue_reclaim_idle_ms` and drive each one
+    through the normal claim -> validate -> execute -> persist -> ack contract.
+
+    Each job is isolated: an exception in one (a poison job) is logged, its delivery count keeps
+    growing toward the dead-letter threshold, and the rest of the batch still runs. Returns the
+    number of jobs re-driven successfully."""
+    reclaimed = queue.reclaim_stale(consumer_name, get_settings().queue_reclaim_idle_ms)
+    handle_dead_letters(db, queue)
+    done = 0
+    for message_id, job in reclaimed:
+        try:
+            outcome = process_claimed_job(
+                db, queue, admission, provider, circuit_breaker, message_id, job
+            )
+            db.commit()
+            done += 1
+            logger.info("reclaimed_job_processed", extra={"outcome": outcome})
+        except Exception:
+            db.rollback()
+            logger.exception("reclaimed_job_failed", extra={"message_id": message_id})
+    return done
 
 
 _LEFT_UNACKED = frozenset(
@@ -363,6 +453,27 @@ def _settle_outside_window(
 
 
 def process_claimed_job(
+    db: Session,
+    queue: RedisStreamQueue,
+    admission: AdmissionController,
+    provider: TelephonyProvider,
+    circuit_breaker: CircuitBreaker,
+    message_id: str,
+    job: DialJob,
+) -> str:
+    """Process one claimed delivery. A job the outcome deliberately leaves unacked is a hold, not a
+    failure: its delivery counter is reset so reclaiming it again and again (a campaign paused for
+    hours) is never mistaken for a poison message (P1-5). An exception skips the reset, so a job
+    that keeps raising keeps counting up and ends in the dead-letter stream."""
+    outcome = _process_claimed_job(
+        db, queue, admission, provider, circuit_breaker, message_id, job
+    )
+    if outcome in _LEFT_UNACKED:
+        queue.reset_deliveries(message_id)
+    return outcome
+
+
+def _process_claimed_job(
     db: Session,
     queue: RedisStreamQueue,
     admission: AdmissionController,
