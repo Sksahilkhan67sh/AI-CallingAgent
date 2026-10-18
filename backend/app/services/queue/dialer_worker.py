@@ -44,6 +44,7 @@ from app.services.audit_service import record_audit_event
 from app.services.calling_window import InvalidTimezoneError, NoDialableWindowError
 from app.services.eligibility_service import DialEligibilityService
 from app.services.queue.admission_controller import AdmissionController
+from app.services.queue.deadline import JobDeadlineExceeded, job_deadline
 from app.services.queue.enqueue_service import enqueue_guard_key
 from app.services.queue.job import DialJob
 from app.services.queue.redis_queue import DeadLetter, RedisStreamQueue
@@ -138,6 +139,10 @@ class JobOutcome:
     # UNACKED, no admission slot taken, no attempt claimed, no retry budget consumed.
     BUDGET_BLOCKED = "budget_blocked"
     NO_JOB = "no_job"
+    # P1-6: the job ran past JOB_DEADLINE_SECONDS and was abandoned. Left UNACKED and deliberately
+    # NOT a hold: it keeps counting deliveries, so a job that always hangs ends in the dead-letter
+    # stream instead of occupying the worker for ever.
+    DEADLINE_EXCEEDED = "deadline_exceeded"
 
 
 def _utcnow() -> datetime:
@@ -465,9 +470,18 @@ def process_claimed_job(
     failure: its delivery counter is reset so reclaiming it again and again (a campaign paused for
     hours) is never mistaken for a poison message (P1-5). An exception skips the reset, so a job
     that keeps raising keeps counting up and ends in the dead-letter stream."""
-    outcome = _process_claimed_job(
-        db, queue, admission, provider, circuit_breaker, message_id, job
-    )
+    try:
+        with job_deadline(get_settings().job_deadline_seconds):
+            outcome = _process_claimed_job(
+                db, queue, admission, provider, circuit_breaker, message_id, job
+            )
+    except JobDeadlineExceeded:
+        # Abandoned. Whatever was already committed (the attempt claim) stays; the rest is
+        # discarded. Same state as a worker killed here: reclaim re-drives the unacked entry and
+        # an existing attempt is reconciled, never triggered a second time.
+        db.rollback()
+        logger.error("job_deadline_exceeded", extra={"message_id": message_id})
+        return JobOutcome.DEADLINE_EXCEEDED
     if outcome in _LEFT_UNACKED:
         queue.reset_deliveries(message_id)
     return outcome

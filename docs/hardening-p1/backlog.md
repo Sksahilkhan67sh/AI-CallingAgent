@@ -5,3 +5,5 @@
 - (P1-4) `NeedsReview` contacts are not counted in the admin dashboard / campaign stats and the erasure job treats them as in-flight. Visibility and an operator "resolve" action are product work; the audit event `sweeper.needs_review` is the record today.
 - (P1-5) The dead-letter stream `<stream>:dlq` (`calls:outbound:dlq`) is unbounded and has no consumer or admin view; operators inspect it with `XRANGE`. A bounded retention policy and a "replay from DLQ" tool are product work.
 - (P1-5) If PostgreSQL is down when a message is dead-lettered, the contact is not marked `NeedsReview` (the DLQ stream is the durable record); the contact stays PENDING behind its 1 h enqueue guard.
+- (P1-6) Recovery dispatch is still every 10 loop iterations (`_RECOVERY_DISPATCH_EVERY_N_ITERATIONS`), so a busy worker dispatches due retries less often. No loss (the schedule is durable, P1-2); make it time-based if retry latency under load matters.
+- (P1-6) `JOB_DEADLINE_SECONDS` uses SIGALRM, so it only works in the main thread of a POSIX process (the worker loop). Elsewhere it is a no-op.
