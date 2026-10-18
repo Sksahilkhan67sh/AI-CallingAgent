@@ -8,7 +8,7 @@ Integration branch: `main` (`develop` does not contain `main`). Labels: [RAN] / 
 | P1-1 | Stream trim drops undelivered jobs | MERGED | #75 | 49,995 / 250,000 lost before; 0 lost after at 250k [RAN]; suite 1736 passed, 1 skipped | 2 |
 | P1-2 | Durable retry schedule in Postgres | MERGED | #76 | 8/8 new tests failed before (retry lost `0 == 1`, double dispatch) [RAN] | 3 |
 | P1-3 | Redis durability and auth | MERGED | #77 | 10/15 new tests failed before [RAN]; drill PASS graceful+crash on real redis-server 7.0.15 with the compose flags [RAN]; compose drill HUMAN-TODO (no Docker) | 4 |
-| P1-4 | Stuck-call sweeper | DOING | | stuck state reproduced at 3 death points on unfixed code; 13 sweeper tests failed (no module) [RAN]; 16 pass incl. faketime x3 | 5 |
+| P1-4 | Stuck-call sweeper | PR-OPEN | #78 | stuck state reproduced at 3 death points on unfixed code; 13 sweeper tests failed (no module) [RAN]; 16 pass incl. faketime x3 | 5 |
 | P1-5 | Dead-letter handling | TODO | | | |
 | P1-6 | Reclaim cadence and per-job deadline | TODO | | | |
 | P1-7 | Explicit timeouts everywhere | TODO | | | |
