@@ -8,6 +8,14 @@ and produces post-call lead analysis. Full specification lives in
 
 ## Status
 
+**Phase 1 hardening, "Stop data loss": delivered (P1-0 to P1-11, `docs/hardening-p1/`).** No queued
+call job, retry or in-flight attempt can be silently lost or duplicated: the dial stream is never
+trimmed, retries live in PostgreSQL (Redis is a rebuildable cache), Redis runs with AOF and a
+password, a stuck-call sweeper and a dead-letter stream resolve what a crash leaves behind, reclaim
+is time-based with a per-job deadline, every outbound call has explicit timeouts, and a failed
+transcript fetch is never recorded as an empty one. Phase 1 is complete only when
+`backend/tests/test_p1_failure_injection.py` passes in CI on `main`.
+
 **Checkpoint 09 — Production Hardening.** Hardens the Checkpoint 08
 Dograh integration for production operation rather than adding new
 features: corrects a real state-machine bug (a call was marked
