@@ -13,6 +13,6 @@ Integration branch: `main` (`develop` does not contain `main`). Labels: [RAN] / 
 | P1-6 | Reclaim cadence and per-job deadline | MERGED | #81 | 12/12 new tests error on unfixed code, pass after incl. faketime x3 [RAN]; suite 1800 passed | 7 |
 | P1-7 | Explicit timeouts everywhere | MERGED | #82 | AST guard found 3 real violations on unfixed code (redis_client.py:17 x2, transcript_fetch.py:44) [RAN]; 33 tests pass incl. faketime x3; suite 1833 passed | 8 |
 | P1-8 | Transcript missing vs empty | MERGED | #83 | failed fetch == empty transcript (`[] == []`) shown on unfixed code [RAN]; 28 tests pass incl. faketime x3; suite 1861 passed | 9 |
-| P1-9 | Verified logic bugs | DOING | | group A: dispatcher dispatched stale entries (4 failing tests on unfixed code [RAN]); suite 1866 passed; remaining suspicions in backlog.md without evidence | 10 |
+| P1-9 | Verified logic bugs | PR-OPEN | #84 | group A: dispatcher dispatched stale entries (4 failing tests on unfixed code [RAN]); suite 1866 passed; remaining suspicions in backlog.md without evidence | 10 |
 | P1-10 | Failure-injection gate | TODO | | | |
 | P1-11 | Close-out | TODO | | | |
