@@ -71,8 +71,9 @@ def test_upgrade_adds_the_status_and_alembic_check_is_clean(scratch):
     assert "NeedsReview" not in _labels(engine)
 
     command.upgrade(cfg, REV)
-
     assert "NeedsReview" in _labels(engine)
+
+    command.upgrade(cfg, "head")  # `check` needs a database at the current head
     command.check(cfg)
 
 

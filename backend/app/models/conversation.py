@@ -38,6 +38,14 @@ class ConversationSession(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # P1-8: what became of the transcript. NULL = none was announced. 'ok' / 'empty' / 'unavailable'
+    # (the fetch failed: NOT the same as empty). Plain strings, not an enum, so the closed set can
+    # grow without a type migration.
+    transcript_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    transcript_unavailable_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The signed link, kept ONLY while the status is 'unavailable' and the reason is retryable, so
+    # the analysis can re-fetch it. Cleared on resolution, by erasure and by transcript retention.
+    transcript_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConversationMessage(Base):

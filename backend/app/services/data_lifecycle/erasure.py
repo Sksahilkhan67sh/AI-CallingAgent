@@ -62,6 +62,15 @@ def _scrub_content(db: Session, contact_ids: list[uuid.UUID]) -> dict[str, int]:
     messages = rowcount(db.execute(
         delete(ConversationMessage).where(ConversationMessage.session_id.in_(session_ids))
     ))
+    # P1-8: a retained signed transcript link is content too; the rest of the session row is kept.
+    db.execute(
+        update(ConversationSession)
+        .where(
+            ConversationSession.id.in_(session_ids),
+            ConversationSession.transcript_url.is_not(None),
+        )
+        .values(transcript_url=None)
+    )
     snapshots = rowcount(db.execute(
         update(WorkingMemorySnapshot)
         .where(

@@ -53,6 +53,8 @@ from app.services.analysis.transcript import (
     prepare_transcript,
 )
 from app.services.audit_service import record_audit_event
+from app.services.telephony.transcript_fetch import is_retryable
+from app.services.telephony.transcript_store import STATUS_UNAVAILABLE, refetch_unavailable
 
 logger = logging.getLogger("analysis_worker")
 
@@ -83,6 +85,17 @@ class _Input:
 class _Skip:
     error_code: str
     release_budget: bool = False
+
+
+@dataclass
+class _Defer:
+    """P1-8: the input is not available YET (or never will be). Not a skip: it is a failure that
+    is retried with backoff up to the attempt cap, then fails -- it is never recorded as an empty
+    conversation."""
+
+    kind: FailureKind
+    code: str
+    created_at: datetime
 
 
 def process_one_analysis_job(
@@ -135,6 +148,22 @@ def process_claimed_job(
     db.commit()
     if isinstance(loaded, _Skip):
         return _persist_skip(db, repo, queue, message_id, analysis_id, token, loaded, clock)
+    if isinstance(loaded, _Defer):
+        return _persist_failure(
+            db,
+            repo,
+            queue,
+            message_id,
+            analysis_id,
+            token,
+            loaded,
+            attempt_count,
+            loaded.kind,
+            loaded.code,
+            None,
+            clock,
+            rng,
+        )
     if not repo.renew_lease(
         analysis_id, token, now=clock(), lease_seconds=settings.analysis_lease_seconds
     ):
@@ -216,7 +245,7 @@ def _handle_unclaimed(
 # -- input -------------------------------------------------------------------------------
 
 
-def _load_input(db: Session, analysis_id: uuid.UUID) -> _Input | _Skip:
+def _load_input(db: Session, analysis_id: uuid.UUID) -> _Input | _Skip | _Defer:
     settings = get_settings()
     analysis = db.get(CallAnalysis, analysis_id)
     assert analysis is not None
@@ -239,6 +268,17 @@ def _load_input(db: Session, analysis_id: uuid.UUID) -> _Input | _Skip:
         return _Skip(failure.ERR_NO_SESSION, release_budget=True)
     if analysis.conversation_session_id not in (None, session.id):
         return _Skip(failure.ERR_BAD_RELATIONSHIP, release_budget=True)
+    if session.transcript_status == STATUS_UNAVAILABLE:
+        # The fetch failed earlier. Try again now (if a link was kept); an unavailable
+        # transcript is never analysed as empty.
+        refetched = refetch_unavailable(db, session)
+        if session.transcript_status == STATUS_UNAVAILABLE:
+            retry = refetched is not None and is_retryable(refetched.reason)
+            return _Defer(
+                FailureKind.TRANSIENT if retry else FailureKind.PERMANENT,
+                failure.ERR_TRANSCRIPT_UNAVAILABLE,
+                created_at,
+            )
     transcript = prepare_transcript(db, session)
     if not transcript.lines:
         # An empty/unavailable conversation is NOT a successful zero-interest result.
@@ -385,7 +425,7 @@ def _persist_failure(
     message_id: str,
     analysis_id: uuid.UUID,
     token: uuid.UUID,
-    loaded: _Input,
+    loaded: _Input | _Defer,
     attempt_count: int,
     kind: FailureKind,
     code: str,

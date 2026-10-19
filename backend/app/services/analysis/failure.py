@@ -44,6 +44,8 @@ ERR_QA_UNAVAILABLE = "qa_unavailable"
 ERR_QA_NOT_PRODUCED = "qa_result_not_produced"
 ERR_NO_SESSION = "no_conversation_session"
 ERR_EMPTY_CONVERSATION = "empty_conversation"
+# P1-8: the transcript could not be fetched. NOT the same fact as "empty_conversation".
+ERR_TRANSCRIPT_UNAVAILABLE = "transcript_unavailable"
 ERR_NOT_ELIGIBLE = "not_eligible"
 ERR_BAD_RELATIONSHIP = "invalid_call_relationship"
 ERR_MISSING_RUN_ID = "missing_provider_run_id"

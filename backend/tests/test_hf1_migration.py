@@ -22,7 +22,12 @@ from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.conversation import ConversationSession
-from app.models.enums import CallAttemptState, CampaignStatus, ContactStatus
+from app.models.enums import (
+    CallAttemptState,
+    CampaignStatus,
+    ContactStatus,
+    ConversationSessionStatus,
+)
 
 PRE_HF1 = "c15a1b2c3d4e"
 HF1_REV = "e2d1c0b9a8f7"
@@ -84,12 +89,18 @@ def _seed(engine) -> uuid.UUID:
         )
         s.add(attempt)
         s.flush()
-        session = ConversationSession(call_attempt_id=attempt.id)
-        s.add(session)
+        # Core insert, explicit columns: the ORM model knows columns added by later migrations
+        # (P1-8) that this pre-HF1 schema does not have yet.
+        session_id = uuid.uuid4()
+        s.execute(
+            ConversationSession.__table__.insert().values(
+                id=session_id, call_attempt_id=attempt.id, status=ConversationSessionStatus.ACTIVE
+            )
+        )
         s.flush()
         analysis = CallAnalysis(
             call_attempt_id=attempt.id,
-            conversation_session_id=session.id,
+            conversation_session_id=session_id,
             contact_id=contact_id,
             campaign_id=campaign.id,
         )

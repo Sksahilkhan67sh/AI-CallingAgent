@@ -34,7 +34,7 @@ from app.core.config import get_settings
 from app.models.call_attempt import CallAttempt
 from app.models.campaign import Campaign
 from app.models.contact import Contact
-from app.models.conversation import ConversationMessage, ConversationRole, ConversationSession
+from app.models.conversation import ConversationRole, ConversationSession
 from app.models.enums import (
     CallAttemptState,
     ContactStatus,
@@ -54,7 +54,8 @@ from app.services.telephony.dograh_reconciliation import (
     is_unresolved_ambiguous_trigger,
     reopen_for_adoption,
 )
-from app.services.telephony.transcript_fetch import fetch_transcript_lines, resolve_target
+from app.services.telephony.transcript_fetch import fetch_transcript, resolve_target
+from app.services.telephony.transcript_store import apply_transcript_result, role_for
 
 logger = logging.getLogger("dograh_webhook")
 
@@ -156,12 +157,7 @@ def _is_safe_transcript_url(url: str) -> bool:
 
 
 def _role_for(raw_role: str) -> ConversationRole:
-    text = raw_role.lower()
-    if any(k in text for k in ("user", "customer", "caller", "human")):
-        return ConversationRole.CONTACT
-    if any(k in text for k in ("assistant", "agent", "bot", "ai")):
-        return ConversationRole.AGENT
-    return ConversationRole.SYSTEM
+    return role_for(raw_role)
 
 
 def _populate_transcript(
@@ -169,19 +165,9 @@ def _populate_transcript(
 ) -> None:
     if not transcript_url:
         return
-    lines = fetch_transcript_lines(transcript_url)
-    for i, line in enumerate(lines, start=1):
-        raw_role = str(line.get("role") or line.get("speaker") or "")
-        content = str(
-            line.get("content") or line.get("text") or line.get("message") or ""
-        ).strip()
-        if not content:
-            continue
-        db.add(
-            ConversationMessage(
-                session_id=session.id, sequence=i, role=_role_for(raw_role), content=content
-            )
-        )
+    # P1-8: a failed fetch is recorded as UNAVAILABLE (and retried by the analysis), never as an
+    # empty conversation.
+    apply_transcript_result(db, session, fetch_transcript(transcript_url), transcript_url)
 
 
 def _reject_correlation(

@@ -167,6 +167,9 @@ backup exists. Treat a backup as the most sensitive copy of the data.
 | conversation_session | id | PII_INDIRECT | ATTEMPT_RECORD | n/a (kept) |
 | conversation_session | started_at | NON_PII | ATTEMPT_RECORD | n/a (kept) |
 | conversation_session | status | NON_PII | ATTEMPT_RECORD | n/a (kept) |
+| conversation_session | transcript_status | NON_PII | ATTEMPT_RECORD | n/a (kept) |
+| conversation_session | transcript_unavailable_reason | NON_PII | ATTEMPT_RECORD | n/a (kept) |
+| conversation_session | transcript_url | SECRET | TRANSCRIPT | `RETENTION_TRANSCRIPT_DAYS` |
 | erasure_log | actor | PII_INDIRECT | ERASURE_LOG | n/a (kept) |
 | erasure_log | counts | NON_PII | ERASURE_LOG | n/a (kept) |
 | erasure_log | fingerprint | PII_INDIRECT | ERASURE_LOG | n/a (kept) |
