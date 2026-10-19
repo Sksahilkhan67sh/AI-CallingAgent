@@ -55,6 +55,11 @@ jobs:
 
       - run: pip install -r requirements-dev.txt -c constraints.txt
 
+      # P2-1: tests/ops needs `age` (backup encryption) and shellcheck. Without them ~43 of the
+      # backup / restore / erasure safety tests skip silently (see the skip budget below).
+      - name: Install tools the ops tests need
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age shellcheck
+
       - name: Pinned set is current (constraints.txt)
         run: scripts/constraints.sh check
 
@@ -83,8 +88,7 @@ jobs:
       # P2-1: tests/ops (backup, restore, erasure safety) skip themselves when a tool is
       # missing, which looks like a pass. This fails the build if more than the allowance skip.
       - name: Skip budget (tests/ops)
-        if: always()
-        run: python scripts/ci_skip_budget.py /tmp/junit.xml --prefix tests.ops --allow 999
+        run: python scripts/ci_skip_budget.py /tmp/junit.xml --prefix tests.ops --allow 0
 
   frontend:
     name: Frontend
