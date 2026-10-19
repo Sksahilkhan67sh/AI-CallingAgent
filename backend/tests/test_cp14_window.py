@@ -385,6 +385,11 @@ def test_a_paused_campaign_keeps_its_deferred_job_until_resumed(rig):
 
 def test_recovery_dispatch_reschedules_retries_to_the_next_opening_in_local_time(rig):
     campaign, (contact,) = commit_world(policy={"window_start": time(10), "window_end": time(18)})
+    # As RecoveryManager leaves it: a retry is only dispatched for a contact that is still
+    # RETRY_SCHEDULED (P1-9).
+    with Session() as s:
+        s.get(Contact, contact).status = ContactStatus.RETRY_SCHEDULED
+        s.commit()
     job = RecoveryJob.new(
         attempt_id=__import__("uuid").UUID("22222222-2222-2222-2222-222222222222"),
         contact_id=contact,
