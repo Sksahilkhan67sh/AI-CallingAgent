@@ -1,6 +1,7 @@
 """post_restore_report is READ ONLY: enforced by the database transaction mode, not by trust."""
 
 import json
+import re
 import uuid
 from datetime import timedelta
 
@@ -23,6 +24,31 @@ from tests.cp15_helpers import (
     make_contact,
     next_number,
 )
+
+# The report JSON legitimately contains random UUIDs, hex fingerprints and real-time ISO
+# timestamps (microseconds). A four-digit phone suffix can appear inside those by chance
+# (~1.3% of runs: CI failed on '0020'), which says nothing about a leak. Remove those tokens
+# before looking for the suffix; a masked number such as "***0020" is not one of them.
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_ISO_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.]+(?:[+-]\d{2}:\d{2})?")
+_LONG_HEX = re.compile(r"[0-9a-f]{8,}")
+
+
+def _leaks_suffix(output: str, suffix: str) -> bool:
+    for random_token in (_UUID, _ISO_TIMESTAMP, _LONG_HEX):
+        output = random_token.sub("<random>", output)
+    return suffix in output
+
+
+def test_suffix_check_ignores_random_tokens_but_still_catches_a_leak():
+    uuid_with_suffix = "5b1c0020-0020-4f4e-8a00-000200200020"
+    assert not _leaks_suffix(f'{{"id": "{uuid_with_suffix}"}}', "0020")
+    assert not _leaks_suffix('{"at": "2026-10-19T02:47:24.002012+00:00"}', "0020")
+    assert not _leaks_suffix('{"fingerprint": "ab00200cdef0123456"}', "0020")
+    # real leaks: masked, spaced and bare forms
+    assert _leaks_suffix('{"phone": "******0020"}', "0020")
+    assert _leaks_suffix('{"phone": "+91 98784 90020"}', "0020")
+    assert _leaks_suffix("phone ends 0020", "0020")
 
 
 def _age(db, contact, hours):
@@ -146,7 +172,7 @@ def test_no_phone_number_in_text_or_json_output_and_secret_checks_are_stable(
     text_out, json_out = report_mod._render(rep), json.dumps(rep)
     for c in stranded.values():
         assert c.phone_number not in text_out + json_out
-        assert c.phone_number[-4:] not in json_out
+        assert not _leaks_suffix(json_out, c.phone_number[-4:])
     again = report_mod.build_report(db_session, NOW)["secret_checks"]
     assert again == rep["secret_checks"] and set(again) == {"erasure_pepper", "jwt_signing_key"}
     monkeypatch.setattr(
