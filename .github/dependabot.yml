@@ -21,11 +21,20 @@ updates:
     groups:
       actions-minor-and-patch:
         update-types: [minor, patch]
+  # P2-1: the base images must track what CI tests (Python 3.11, Node 22 LTS). Dependabot once
+  # merged python:3.14 and node:25 (never built or tested; Node 25 is end-of-life). Python's
+  # minor releases are its breaking releases, so both major and minor are ignored for it.
   - package-ecosystem: docker
     directory: /backend
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: docker
     directory: /frontend
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
