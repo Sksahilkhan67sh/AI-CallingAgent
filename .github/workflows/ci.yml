@@ -70,7 +70,7 @@ jobs:
       - name: Test (pytest)
         run: |
           set -o pipefail
-          pytest -q -rfE 2>&1 | tee /tmp/pytest.log || {
+          pytest -q -rfE --junitxml=/tmp/junit.xml 2>&1 | tee /tmp/pytest.log || {
             grep -E '^(FAILED|ERROR)' /tmp/pytest.log | head -20 | while IFS= read -r line; do
               echo "::error title=pytest::${line:0:400}"
             done
@@ -79,6 +79,12 @@ jobs:
             done
             exit 1
           }
+
+      # P2-1: tests/ops (backup, restore, erasure safety) skip themselves when a tool is
+      # missing, which looks like a pass. This fails the build if more than the allowance skip.
+      - name: Skip budget (tests/ops)
+        if: always()
+        run: python scripts/ci_skip_budget.py /tmp/junit.xml --prefix tests.ops --allow 999
 
   frontend:
     name: Frontend
