@@ -109,6 +109,16 @@ def _process_one(
         _log_skip(db, job, "suppressed")
         return 0
 
+    # P1-9: only a contact that is STILL waiting for this retry is dispatched. A stale entry --
+    # the contact was completed by a late webhook of the earlier attempt, parked NEEDS_REVIEW by
+    # the sweeper or the dead-letter handler, or erased -- is dropped here. (The dialer's
+    # eligibility check would refuse the call anyway; this keeps the queue and the audit trail
+    # from claiming a redial that never happens.) Never overwrites the newer status.
+    if contact.purged_at is not None or contact.status != ContactStatus.RETRY_SCHEDULED:
+        _clear_schedule(contact)
+        _log_skip(db, job, "contact_not_retryable", contact_status=contact.status.value)
+        return 0
+
     if campaign.status == CampaignStatus.COMPLETED:
         _clear_schedule(contact)
         _log_skip(db, job, "campaign_completed")
@@ -192,12 +202,14 @@ def _clear_schedule(contact: Contact) -> None:
     contact.retry_attempt_number = None
 
 
-def _log_skip(db: Session, job: RecoveryJob, reason: str, *, rescheduled: bool = False) -> None:
+def _log_skip(
+    db: Session, job: RecoveryJob, reason: str, *, rescheduled: bool = False, **detail: str
+) -> None:
     db.add(
         CallEvent(
             call_attempt_id=uuid.UUID(job.attempt_id),
             event_type="RECOVERY_SKIPPED",
-            payload={"reason": reason, "rescheduled": rescheduled},
+            payload={"reason": reason, "rescheduled": rescheduled, **detail},
         )
     )
     db.flush()
