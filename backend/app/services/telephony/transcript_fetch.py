@@ -32,6 +32,7 @@ import logging
 import socket
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from urllib.parse import urlsplit
 
 import httpx
@@ -42,6 +43,46 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PORTS = {"https": 443, "http": 80}
 _TOTAL_DEADLINE_SECONDS = 20.0
+
+
+class TranscriptKind(StrEnum):
+    OK = "ok"
+    EMPTY = "empty"
+    UNAVAILABLE = "unavailable"
+
+
+# Closed set of sanitized reasons (stored on the session; never a URL, header or exception text).
+REASON_URL_BLOCKED = "url_blocked"
+REASON_NETWORK_ERROR = "network_error"
+REASON_HTTP_STATUS = "http_status"
+REASON_CONTENT_TYPE = "content_type"
+REASON_TOO_LARGE = "too_large"
+REASON_DEADLINE = "deadline"
+REASON_INVALID_JSON = "invalid_json"
+REASON_UNEXPECTED_SHAPE = "unexpected_shape"
+# Worth trying again: the problem is on the wire or the server's side, not in the URL or content.
+_RETRYABLE = frozenset({REASON_NETWORK_ERROR, REASON_HTTP_STATUS, REASON_DEADLINE})
+
+
+def is_retryable(reason: str | None) -> bool:
+    return reason in _RETRYABLE
+
+
+@dataclass(frozen=True)
+class TranscriptResult:
+    kind: TranscriptKind
+    lines: list[dict]
+    reason: str | None  # set only for UNAVAILABLE
+
+
+def _unavailable(reason: str) -> TranscriptResult:
+    return TranscriptResult(TranscriptKind.UNAVAILABLE, [], reason)
+
+
+class _Rejected(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 # Plausible content types for a JSON export. text/plain and octet-stream are
 # included because object stores commonly serve JSON that way; HTML, images etc.
 # (an error page, a redirect interstitial, a payload that is not a transcript) are not.
@@ -132,7 +173,9 @@ def _timeout() -> httpx.Timeout:
     )
 
 
-def _download(target: _Target) -> bytes | None:
+def _fetch_body(target: _Target) -> bytes:
+    """The response body. Raises _Rejected(reason) when the response must not be used, and
+    httpx/OS errors when the transport fails -- never returns "nothing"."""
     settings = get_settings()
     max_bytes = settings.dograh_transcript_max_bytes
     ip_literal = f"[{target.ip}]" if ":" in target.ip else target.ip
@@ -150,44 +193,68 @@ def _download(target: _Target) -> bytes | None:
     ):
         if response.status_code != 200:  # includes every 3xx: redirects are not followed
             logger.warning("dograh_transcript_fetch_rejected", extra={"reason": "status"})
-            return None
+            raise _Rejected(REASON_HTTP_STATUS)
         if not _is_json_content_type(response.headers.get("content-type")):
             logger.warning("dograh_transcript_fetch_rejected", extra={"reason": "content_type"})
-            return None
+            raise _Rejected(REASON_CONTENT_TYPE)
         declared = response.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > max_bytes:
             logger.warning("dograh_transcript_fetch_rejected", extra={"reason": "too_large"})
-            return None
+            raise _Rejected(REASON_TOO_LARGE)
         body = bytearray()
         for chunk in response.iter_bytes():
             body.extend(chunk)
             if len(body) > max_bytes:
                 logger.warning("dograh_transcript_fetch_rejected", extra={"reason": "too_large"})
-                return None
+                raise _Rejected(REASON_TOO_LARGE)
             if time.monotonic() > deadline:
                 logger.warning("dograh_transcript_fetch_rejected", extra={"reason": "deadline"})
-                return None
+                raise _Rejected(REASON_DEADLINE)
         return bytes(body)
 
 
-def fetch_transcript_lines(url: str) -> list[dict]:
-    """Best-effort: never raises (a failed transcript must not fail webhook
-    processing -- the call's terminal-state transition is the durable part) and
-    never logs the URL (it may carry a signed token)."""
+def _download(target: _Target) -> bytes | None:
+    """Compatibility wrapper: the body, or None when the response was rejected."""
+    try:
+        return _fetch_body(target)
+    except _Rejected:
+        return None
+
+
+def fetch_transcript(url: str) -> TranscriptResult:
+    """Best-effort and never raises (a failed transcript must not fail webhook processing -- the
+    call's terminal-state transition is the durable part) and never logs or returns the URL (it
+    may carry a signed token).
+
+    OK(lines) / EMPTY (a valid transcript with no lines) / UNAVAILABLE(reason). A failure is
+    UNAVAILABLE, never EMPTY: "we could not read it" and "there was nothing in it" are different
+    facts and the analysis treats them differently (P1-8)."""
     target = resolve_target(url)
     if target is None:
         logger.warning("dograh_transcript_url_blocked")
-        return []
+        return _unavailable(REASON_URL_BLOCKED)
     try:
-        body = _download(target)
-        data = json.loads(body) if body is not None else None
+        body = _fetch_body(target)
+    except _Rejected as exc:
+        return _unavailable(exc.reason)
     except (httpx.HTTPError, httpx.StreamError, httpx.InvalidURL, OSError):
         logger.warning("dograh_transcript_fetch_failed")
-        return []
+        return _unavailable(REASON_NETWORK_ERROR)
+    try:
+        data = json.loads(body)
     except (ValueError, RecursionError):  # not JSON / not UTF-8 / absurdly nested
         logger.warning("dograh_transcript_parse_failed")
-        return []
+        return _unavailable(REASON_INVALID_JSON)
     if not isinstance(data, list):
-        return []
+        return _unavailable(REASON_UNEXPECTED_SHAPE)
     lines = [item for item in data if isinstance(item, dict)]
-    return lines[: get_settings().dograh_transcript_max_lines]
+    lines = lines[: get_settings().dograh_transcript_max_lines]
+    if not lines:
+        return TranscriptResult(TranscriptKind.EMPTY, [], None)
+    return TranscriptResult(TranscriptKind.OK, lines, None)
+
+
+def fetch_transcript_lines(url: str) -> list[dict]:
+    """The lines only ([] for both EMPTY and UNAVAILABLE). Kept for callers that do not care
+    why; anything that decides what a missing transcript MEANS must use fetch_transcript."""
+    return fetch_transcript(url).lines

@@ -142,6 +142,29 @@ def _delete_messages(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
     return rowcount(db.execute(delete(ConversationMessage).where(ConversationMessage.id.in_(ids))))
 
 
+def _transcript_links(cutoff: datetime, _run: uuid.UUID | None) -> Select:
+    """P1-8: a signed transcript link retained for a retry of an UNAVAILABLE transcript."""
+    return (
+        select(ConversationSession.id)
+        .join(CallAttempt, CallAttempt.id == ConversationSession.call_attempt_id)
+        .where(
+            ConversationSession.transcript_url.is_not(None),
+            ConversationSession.started_at < cutoff,
+            CallAttempt.contact_id.not_in(held_contact_ids()),
+        )
+    )
+
+
+def _clear_transcript_links(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
+    return rowcount(
+        db.execute(
+            update(ConversationSession)
+            .where(ConversationSession.id.in_(ids))
+            .values(transcript_url=None)
+        )
+    )
+
+
 def _snapshots(cutoff: datetime, _run: uuid.UUID | None) -> Select:
     return (
         select(WorkingMemorySnapshot.id)
@@ -274,6 +297,7 @@ def _delete_runs(db: Session, ids: list[uuid.UUID], _now: datetime) -> int:
 
 _STEPS: tuple[_Step, ...] = (
     _Step("transcript_messages", "transcript_days", _transcript_messages, _delete_messages),
+    _Step("transcript_links", "transcript_days", _transcript_links, _clear_transcript_links),
     _Step("working_memory_snapshots", "transcript_days", _snapshots, _scrub_snapshots),
     _Step("analysis_free_text", "analysis_days", _analysis, _scrub_analysis),
     _Step("contacts", "contact_days", _contacts, scrub_contacts),

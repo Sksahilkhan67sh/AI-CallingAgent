@@ -219,7 +219,7 @@ def test_malformed_recording_url_does_not_reject_a_valid_webhook(
     def _no_fetch(*_a, **_k):  # pragma: no cover - failing here is the assertion
         raise AssertionError("recording_url must never trigger a fetch")
 
-    monkeypatch.setattr(svc, "fetch_transcript_lines", _no_fetch)
+    monkeypatch.setattr(svc, "fetch_transcript", _no_fetch)
     _, _, attempt = _initiated_call(db_session, phone="989-970-0101")
 
     response = client.post(

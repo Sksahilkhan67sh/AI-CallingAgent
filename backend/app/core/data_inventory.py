@@ -237,6 +237,11 @@ _SPEC: dict[str, dict[str, tuple[DataClass, Retention]]] = {
         "status": (N, R.ATTEMPT_RECORD),
         "started_at": (N, R.ATTEMPT_RECORD),
         "ended_at": (N, R.ATTEMPT_RECORD),
+        "transcript_status": (N, R.ATTEMPT_RECORD),
+        "transcript_unavailable_reason": (N, R.ATTEMPT_RECORD),
+        # A signed link: kept only while retryable-unavailable; cleared on resolution, by erasure
+        # and by transcript retention.
+        "transcript_url": (S, R.TRANSCRIPT),
     },
     "erasure_log": {
         "id": (N, R.ERASURE_LOG),
