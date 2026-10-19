@@ -69,7 +69,9 @@ def test_dependabot_cannot_bump_the_base_images() -> None:
 def test_ci_installs_age_before_the_tests() -> None:
     steps = CI["jobs"]["backend"]["steps"]
     install = next(
-        i for i, s in enumerate(steps) if "apt-get install" in s.get("run", "") and "age" in s["run"]
+        i
+        for i, s in enumerate(steps)
+        if "apt-get install" in s.get("run", "") and re.search(r"\bage\b", s["run"])
     )
     test = next(i for i, s in enumerate(steps) if "pytest" in s.get("run", ""))
     assert install < test
