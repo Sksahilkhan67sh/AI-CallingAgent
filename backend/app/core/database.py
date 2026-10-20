@@ -11,16 +11,32 @@ this module intentionally does not expose a `create_all()` startup path.
 """
 
 from collections.abc import Generator
+from typing import Any
 
 from fastapi import Depends
-from sqlalchemy import create_engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 
 settings = get_settings()
 
-engine = create_engine(settings.primary_db_url, pool_size=settings.primary_db_pool_size)
+
+def make_engine(s: Settings, **kwargs: Any) -> Engine:
+    """Build an engine from the pool settings (P2-2). Extra keyword arguments go to
+    `create_engine` (used by tests and by role-specific options)."""
+    return create_engine(
+        s.primary_db_url,
+        pool_size=s.db_pool_size,
+        max_overflow=s.db_max_overflow,
+        pool_timeout=s.db_pool_timeout,
+        pool_recycle=s.db_pool_recycle if s.db_pool_recycle > 0 else -1,
+        pool_pre_ping=s.db_pool_pre_ping,
+        **kwargs,
+    )
+
+
+engine = make_engine(settings)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 

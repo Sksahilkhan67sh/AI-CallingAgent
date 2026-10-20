@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import phonenumbers
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
@@ -94,7 +94,24 @@ class Settings(BaseSettings):
     primary_db_url: str = (
         "postgresql+psycopg://postgres:postgres@localhost:5432/ai_calling_agent"
     )
-    primary_db_pool_size: int = 5
+    # P2-2: connection pool. Every value is per PROCESS (API, worker, analysis worker and sweeper
+    # each build one engine), so the database needs room for the sum; see
+    # docs/hardening-p2/SETTINGS.md. `PRIMARY_DB_POOL_SIZE` is the name before Phase 2.
+    db_pool_size: int = Field(
+        default=5,
+        ge=1,
+        validation_alias=AliasChoices("DB_POOL_SIZE", "PRIMARY_DB_POOL_SIZE", "db_pool_size"),
+    )
+    db_max_overflow: int = Field(default=10, ge=0)
+    # Seconds a request waits for a free connection before the pool gives up (-> HTTP 503).
+    db_pool_timeout: float = Field(default=10.0, gt=0)
+    # Seconds after which a connection is replaced; 0 disables (some proxies drop idle sessions).
+    db_pool_recycle: int = Field(default=1800, ge=0)
+    # Test a pooled connection before handing it out, so a connection the server has already
+    # dropped (restart, failover, idle kill) is replaced instead of failing a request.
+    db_pool_pre_ping: bool = True
+    # `Retry-After` (seconds) sent with the 503 for an unavailable database.
+    db_retry_after_seconds: int = Field(default=2, ge=1)
 
     # --- Queue / dialer (Checkpoint 03) ---
     redis_url: str = "redis://localhost:6379/0"

@@ -6,7 +6,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DisconnectionError, IntegrityError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.api.routes.admin_auth import router as admin_auth_router
 from app.api.routes.admin_call_attempts import router as admin_call_attempts_router
@@ -89,6 +90,20 @@ def handle_integrity_error(request: Request, exc: IntegrityError) -> JSONRespons
     )
 
 
+def handle_database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    # P2-2: a lost connection, a failover or an exhausted pool is the database being briefly
+    # unavailable, not a bug: tell the client to retry instead of answering 500, and never echo
+    # the driver message (it can carry host names, SQL and parameters).
+    logging.getLogger("app.database").warning(
+        "database_unavailable", extra={"error_type": type(exc).__name__}
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The database is temporarily unavailable. Please retry shortly."},
+        headers={"Retry-After": str(get_settings().db_retry_after_seconds)},
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. HF1 1.4: in staging and production the interactive docs and
     the OpenAPI schema are disabled (404); development and test keep them."""
@@ -148,6 +163,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         handle_service_unavailable,  # type: ignore[arg-type]
     )
     application.add_exception_handler(IntegrityError, handle_integrity_error)  # type: ignore[arg-type]
+    for db_error in (OperationalError, DisconnectionError, PoolTimeoutError):
+        application.add_exception_handler(db_error, handle_database_unavailable)
     return application
 
 
