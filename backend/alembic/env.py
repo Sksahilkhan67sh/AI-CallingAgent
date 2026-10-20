@@ -10,6 +10,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
+from app.core.database import migration_timeouts_ms, server_options
 from app.models import Base
 
 config = context.config
@@ -40,6 +41,8 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # P2-3: no statement timeout, bounded lock timeout, whatever the role's own defaults are.
+        connect_args={"options": server_options(migration_timeouts_ms(get_settings()))},
     )
 
     with connectable.connect() as connection:

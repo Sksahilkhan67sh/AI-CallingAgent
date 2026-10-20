@@ -15,6 +15,7 @@ secrets manager -- never via committed files.
 
 from datetime import time
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -112,6 +113,23 @@ class Settings(BaseSettings):
     db_pool_pre_ping: bool = True
     # `Retry-After` (seconds) sent with the 503 for an unavailable database.
     db_retry_after_seconds: int = Field(default=2, ge=1)
+
+    # P2-3: server-side limits (0 disables one). The role says which set a process gets; compose
+    # sets it per service. A process that forgets it gets the strict API limits, which is the
+    # safe direction. `script` = ops CLIs (retention, erasure, restore report).
+    db_role: Literal["api", "worker", "analysis", "sweeper", "script"] = "api"
+    # API: short, so a stuck request frees its connection and the client gets a 503.
+    db_statement_timeout_ms: int = Field(default=15_000, ge=0)
+    db_lock_timeout_ms: int = Field(default=5_000, ge=0)
+    db_idle_in_tx_timeout_ms: int = Field(default=30_000, ge=0)
+    # worker / analysis worker / sweeper / script: longer. The worker keeps its transaction open
+    # while it calls the provider (up to JOB_DEADLINE_SECONDS), so its idle limit must exceed that.
+    db_worker_statement_timeout_ms: int = Field(default=60_000, ge=0)
+    db_worker_lock_timeout_ms: int = Field(default=15_000, ge=0)
+    db_worker_idle_in_tx_timeout_ms: int = Field(default=120_000, ge=0)
+    # Alembic: no statement timeout (a migration may legitimately run long), but a bounded wait for
+    # locks so a migration blocked by a long transaction fails loudly instead of hanging deploys.
+    db_migration_lock_timeout_ms: int = Field(default=10_000, ge=0)
 
     # --- Queue / dialer (Checkpoint 03) ---
     redis_url: str = "redis://localhost:6379/0"
@@ -402,6 +420,18 @@ class Settings(BaseSettings):
     # OPEN: an unknown ENVIRONMENT skips the production checks entirely, an
     # unknown CALLING_ENGINE silently runs the native/mock engine, and an
     # unknown DOGRAH_TRIGGER_MODE silently hits Dograh's /test/ endpoint.
+    @model_validator(mode="after")
+    def _validate_db_timeouts(self) -> "Settings":
+        # P2-3: the worker holds its transaction open while it calls the provider. An idle limit
+        # shorter than the job deadline would make Postgres kill live work mid-dial.
+        limit = self.db_worker_idle_in_tx_timeout_ms
+        if limit and limit <= self.job_deadline_seconds * 1000:
+            raise ValueError(
+                f"DB_WORKER_IDLE_IN_TX_TIMEOUT_MS ({limit}) must exceed JOB_DEADLINE_SECONDS "
+                f"({self.job_deadline_seconds}) in milliseconds, or 0 to disable"
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_cp14_config(self) -> "Settings":
         problems: list[str] = []

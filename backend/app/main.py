@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import DisconnectionError, IntegrityError, OperationalError
+from sqlalchemy.exc import DisconnectionError, IntegrityError, InternalError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.api.routes.admin_auth import router as admin_auth_router
@@ -104,6 +104,18 @@ def handle_database_unavailable(request: Request, exc: Exception) -> JSONRespons
     )
 
 
+_IDLE_IN_TRANSACTION_TIMEOUT_SQLSTATE = "25P03"
+
+
+def handle_internal_error(request: Request, exc: InternalError) -> JSONResponse:
+    # P2-3: when the server kills a transaction that sat idle too long, the next statement raises
+    # InternalError, not OperationalError. That one case is the database being unavailable to
+    # this request (retry); any other InternalError is a genuine fault and stays a 500.
+    if getattr(exc.orig, "sqlstate", None) == _IDLE_IN_TRANSACTION_TIMEOUT_SQLSTATE:
+        return handle_database_unavailable(request, exc)
+    raise exc
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. HF1 1.4: in staging and production the interactive docs and
     the OpenAPI schema are disabled (404); development and test keep them."""
@@ -163,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         handle_service_unavailable,  # type: ignore[arg-type]
     )
     application.add_exception_handler(IntegrityError, handle_integrity_error)  # type: ignore[arg-type]
+    application.add_exception_handler(InternalError, handle_internal_error)  # type: ignore[arg-type]
     for db_error in (OperationalError, DisconnectionError, PoolTimeoutError):
         application.add_exception_handler(db_error, handle_database_unavailable)
     return application
