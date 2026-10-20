@@ -1,7 +1,10 @@
 """FastAPI application entrypoint."""
 
 import logging
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +30,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import Settings, get_settings
+from app.core.database import threadpool_warnings
 from app.core.errors import (
     ConflictError,
     NotFoundError,
@@ -116,6 +120,20 @@ def handle_internal_error(request: Request, exc: InternalError) -> JSONResponse:
     raise exc
 
 
+def _lifespan(s: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        # P2-4: sync routes run in the AnyIO threadpool (40 tokens by default). Size it from the
+        # settings so request threads and database connections stay in proportion.
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        limiter.total_tokens = s.effective_api_threadpool_size
+        for warning in threadpool_warnings(s):
+            logging.getLogger("app.database").warning(warning)
+        yield
+
+    return lifespan
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application. HF1 1.4: in staging and production the interactive docs and
     the OpenAPI schema are disabled (404); development and test keep them."""
@@ -123,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     expose_docs = settings.environment not in _NO_DOCS_ENVIRONMENTS
     application = FastAPI(
         title=settings.app_name,
+        lifespan=_lifespan(settings),
         docs_url="/docs" if expose_docs else None,
         redoc_url="/redoc" if expose_docs else None,
         openapi_url="/openapi.json" if expose_docs else None,
