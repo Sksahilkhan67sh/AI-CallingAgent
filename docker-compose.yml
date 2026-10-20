@@ -58,6 +58,7 @@ services:
       - ./backend/.env.example
     environment:
       - LOG_LEVEL=debug
+      - DB_ROLE=worker
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
     depends_on:
@@ -73,6 +74,7 @@ services:
       - ./backend/.env.example
     environment:
       - LOG_LEVEL=debug
+      - DB_ROLE=analysis
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
     depends_on:
@@ -88,6 +90,7 @@ services:
       - ./backend/.env.example
     environment:
       - LOG_LEVEL=debug
+      - DB_ROLE=sweeper
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
     depends_on:

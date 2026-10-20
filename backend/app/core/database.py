@@ -22,9 +22,40 @@ from app.core.config import Settings, get_settings
 settings = get_settings()
 
 
+def role_timeouts_ms(s: Settings) -> dict[str, int]:
+    """Server-side limits for this process's role (P2-3). 0 means no limit, as in PostgreSQL."""
+    if s.db_role == "api":
+        return {
+            "statement_timeout": s.db_statement_timeout_ms,
+            "lock_timeout": s.db_lock_timeout_ms,
+            "idle_in_transaction_session_timeout": s.db_idle_in_tx_timeout_ms,
+        }
+    return {
+        "statement_timeout": s.db_worker_statement_timeout_ms,
+        "lock_timeout": s.db_worker_lock_timeout_ms,
+        "idle_in_transaction_session_timeout": s.db_worker_idle_in_tx_timeout_ms,
+    }
+
+
+def migration_timeouts_ms(s: Settings) -> dict[str, int]:
+    """Alembic: no statement or idle limit, a bounded lock wait."""
+    return {
+        "statement_timeout": 0,
+        "lock_timeout": s.db_migration_lock_timeout_ms,
+        "idle_in_transaction_session_timeout": 0,
+    }
+
+
+def server_options(timeouts_ms: dict[str, int]) -> str:
+    """The libpq `options` string that applies the limits to every new connection."""
+    return " ".join(f"-c {name}={ms}" for name, ms in timeouts_ms.items())
+
+
 def make_engine(s: Settings, **kwargs: Any) -> Engine:
-    """Build an engine from the pool settings (P2-2). Extra keyword arguments go to
-    `create_engine` (used by tests and by role-specific options)."""
+    """Build an engine from the pool and timeout settings (P2-2, P2-3). Extra keyword arguments
+    go to `create_engine` (used by tests)."""
+    connect_args = dict(kwargs.pop("connect_args", {}))
+    connect_args["options"] = server_options(role_timeouts_ms(s))
     return create_engine(
         s.primary_db_url,
         pool_size=s.db_pool_size,
@@ -32,6 +63,7 @@ def make_engine(s: Settings, **kwargs: Any) -> Engine:
         pool_timeout=s.db_pool_timeout,
         pool_recycle=s.db_pool_recycle if s.db_pool_recycle > 0 else -1,
         pool_pre_ping=s.db_pool_pre_ping,
+        connect_args=connect_args,
         **kwargs,
     )
 
