@@ -20,5 +20,7 @@ service through that service's environment.
 | `DB_WORKER_LOCK_TIMEOUT_MS` | 15000 | P2-3 | Same, for those roles. |
 | `DB_WORKER_IDLE_IN_TX_TIMEOUT_MS` | 120000 | P2-3 | Same, for those roles. **Must exceed `JOB_DEADLINE_SECONDS` x 1000** (the worker holds its transaction open during the provider call); the app refuses to boot otherwise. |
 | `DB_MIGRATION_LOCK_TIMEOUT_MS` | 10000 | P2-3 | Alembic only: bounded wait for locks. Alembic always runs with no statement and no idle limit, whatever the migration role's own defaults are. |
+| `API_THREADPOOL_SIZE` | unset = `DB_POOL_SIZE + DB_MAX_OVERFLOW` (15) | P2-4 | Threads that run sync API routes (the AnyIO default is 40). Equal to the pool capacity, request threads cannot outnumber connections; larger only logs a startup warning (valid if many requests never touch the database). Per web process (see P2-6). |
+| `DB_MAX_CONNECTIONS_BUDGET` | unset | P2-4 | Most connections this process may hold. Set per service from `CONNECTION-BUDGET.md`; the app **fails to boot** if `DB_POOL_SIZE + DB_MAX_OVERFLOW` exceeds it. |
 
 Defaults are [ASSUMED] until P2-8 measures them; P2-4 and P2-8 may revise them with evidence.

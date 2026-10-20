@@ -93,3 +93,16 @@ def get_db() -> Generator[Session, None, None]:
 # Every route and dependency uses this one marker so they all share ONE session per request
 # (the dependency cache is keyed by scope); tests/test_hf2_get_db_commit_timing.py enforces it.
 DB_SESSION = Depends(get_db, scope="function")
+
+
+def threadpool_warnings(s: Settings) -> list[str]:
+    """Why the API threadpool may outgrow the pool (P2-4). A warning, not an error: when many
+    requests never touch the database, more threads than connections is a fair choice."""
+    if s.effective_api_threadpool_size <= s.pool_capacity:
+        return []
+    return [
+        f"API_THREADPOOL_SIZE ({s.effective_api_threadpool_size}) exceeds the pool capacity "
+        f"({s.pool_capacity} = DB_POOL_SIZE + DB_MAX_OVERFLOW): if that many requests need the "
+        f"database at once, the surplus waits up to DB_POOL_TIMEOUT ({s.db_pool_timeout:g} s) "
+        "and then gets a 503"
+    ]

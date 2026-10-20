@@ -131,6 +131,22 @@ class Settings(BaseSettings):
     # locks so a migration blocked by a long transaction fails loudly instead of hanging deploys.
     db_migration_lock_timeout_ms: int = Field(default=10_000, ge=0)
 
+    # P2-4: size of the AnyIO threadpool that runs sync API routes. Unset = the pool capacity
+    # (DB_POOL_SIZE + DB_MAX_OVERFLOW), so request threads cannot outnumber connections.
+    api_threadpool_size: int | None = Field(default=None, ge=1)
+    # P2-4: the most connections THIS process may ever hold. Unset = no check. Set it per service
+    # from docs/hardening-p2/CONNECTION-BUDGET.md; the app refuses to boot if its pool is larger.
+    db_max_connections_budget: int | None = Field(default=None, ge=1)
+
+    @property
+    def pool_capacity(self) -> int:
+        """Most connections one process of this configuration can hold open."""
+        return self.db_pool_size + self.db_max_overflow
+
+    @property
+    def effective_api_threadpool_size(self) -> int:
+        return self.api_threadpool_size or self.pool_capacity
+
     # --- Queue / dialer (Checkpoint 03) ---
     redis_url: str = "redis://localhost:6379/0"
     queue_stream_key: str = "calls:outbound"
@@ -420,6 +436,19 @@ class Settings(BaseSettings):
     # OPEN: an unknown ENVIRONMENT skips the production checks entirely, an
     # unknown CALLING_ENGINE silently runs the native/mock engine, and an
     # unknown DOGRAH_TRIGGER_MODE silently hits Dograh's /test/ endpoint.
+    @model_validator(mode="after")
+    def _validate_connection_budget(self) -> "Settings":
+        # P2-4: an operator who states a per-process budget is protecting max_connections for the
+        # whole fleet; a bigger pool is a configuration error, so refuse to boot (all
+        # environments), unlike the threadpool check which only warns.
+        budget = self.db_max_connections_budget
+        if budget is not None and self.pool_capacity > budget:
+            raise ValueError(
+                f"DB_POOL_SIZE + DB_MAX_OVERFLOW ({self.pool_capacity}) exceeds "
+                f"DB_MAX_CONNECTIONS_BUDGET ({budget})"
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_db_timeouts(self) -> "Settings":
         # P2-3: the worker holds its transaction open while it calls the provider. An idle limit

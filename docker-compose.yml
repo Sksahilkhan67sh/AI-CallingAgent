@@ -1,6 +1,9 @@
 services:
   db:
     image: postgres:16
+    # P2-4: explicit on purpose (the image default is also 100). Must cover the sum in
+    # docs/hardening-p2/CONNECTION-BUDGET.md plus its reserve; a test checks it.
+    command: ["postgres", "-c", "max_connections=100"]
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
