@@ -20,3 +20,6 @@ Next: start P2-5 (branch `fix/p2-5-migrate-job`).
 
 ## HUMAN-TODO
 - P2-1: `docker build ./backend` and `docker build ./frontend` (never built in this sandbox).
+
+## Incidents
+- 2026-10-21, PR #97: the Dependency audit check started failing for every commit (including PR #96 for P2-5, which changes no dependency) because PYSEC-2026-4320 was published against `certifi==2026.7.22` (bundled CA store trusted a root whose intermediates have compromised keys; fixed in 2026.10.19). Fixed by pinning only `certifi==2026.10.19` in `backend/constraints.txt` [RAN: `scripts/constraints.sh check`, `audit_gate.py pip` and `audit_gate.py npm` all clean locally]. Not a Phase 2 task; no other dependency changed.
