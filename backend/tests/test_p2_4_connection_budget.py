@@ -113,6 +113,7 @@ def _compose_db_services() -> dict[str, dict]:
         name: svc
         for name, svc in COMPOSE["services"].items()
         if any(str(e).startswith("PRIMARY_DB_URL=") for e in svc.get("environment", []))
+        and name != "migrate"  # one-shot, counted in the budget's Reserve table
     }
 
 

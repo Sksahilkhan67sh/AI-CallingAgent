@@ -22,5 +22,9 @@ service through that service's environment.
 | `DB_MIGRATION_LOCK_TIMEOUT_MS` | 10000 | P2-3 | Alembic only: bounded wait for locks. Alembic always runs with no statement and no idle limit, whatever the migration role's own defaults are. |
 | `API_THREADPOOL_SIZE` | unset = `DB_POOL_SIZE + DB_MAX_OVERFLOW` (15) | P2-4 | Threads that run sync API routes (the AnyIO default is 40). Equal to the pool capacity, request threads cannot outnumber connections; larger only logs a startup warning (valid if many requests never touch the database). Per web process (see P2-6). |
 | `DB_MAX_CONNECTIONS_BUDGET` | unset | P2-4 | Most connections this process may hold. Set per service from `CONNECTION-BUDGET.md`; the app **fails to boot** if `DB_POOL_SIZE + DB_MAX_OVERFLOW` exceeds it. |
+| `RUN_MIGRATIONS` | 0 | P2-5 | The container entrypoint runs `alembic upgrade head` only when this is `1`. Compose uses the one-shot `migrate` service instead, so keep 0 everywhere except a single-container deployment that has no migrate job. |
+| `DB_MIGRATION_LOCK_WAIT_SECONDS` | 300 | P2-5 | How long a migrator waits for another one (advisory lock) before giving up with "another migration ... not migrating". |
+| `DB_MIGRATION_LOCK_RETRIES` | 3 | P2-5 | Attempts when a long transaction blocks a migration for longer than `DB_MIGRATION_LOCK_TIMEOUT_MS`; then abort with "migration blocked by a lock". |
+| `DB_MIGRATION_RETRY_DELAY_SECONDS` | 2 | P2-5 | Pause between those attempts. |
 
 Defaults are [ASSUMED] until P2-8 measures them; P2-4 and P2-8 may revise them with evidence.
