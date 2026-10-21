@@ -26,5 +26,8 @@ service through that service's environment.
 | `DB_MIGRATION_LOCK_WAIT_SECONDS` | 300 | P2-5 | How long a migrator waits for another one (advisory lock) before giving up with "another migration ... not migrating". |
 | `DB_MIGRATION_LOCK_RETRIES` | 3 | P2-5 | Attempts when a long transaction blocks a migration for longer than `DB_MIGRATION_LOCK_TIMEOUT_MS`; then abort with "migration blocked by a lock". |
 | `DB_MIGRATION_RETRY_DELAY_SECONDS` | 2 | P2-5 | Pause between those attempts. |
+| `WEB_CONCURRENCY` | 1 | P2-6 | API processes started by `python -m app.serve` (`uvicorn --workers`). **Each has its own pool and threadpool**, so the API's connections are `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW)`: recompute `CONNECTION-BUDGET.md` before raising it. Default 1 keeps the budget unchanged. |
+| `WEB_GRACEFUL_SHUTDOWN_SECONDS` | 30 | P2-6 | After SIGTERM the API stops accepting, lets in-flight requests finish for at most this long, then stops. Compose `stop_grace_period` for `backend` (40 s) must stay above it. |
+| `WEB_KEEP_ALIVE_SECONDS` | 5 | P2-6 | Idle keep-alive connections are closed after this many seconds. Keep it below any load balancer idle timeout. |
 
 Defaults are [ASSUMED] until P2-8 measures them; P2-4 and P2-8 may revise them with evidence.

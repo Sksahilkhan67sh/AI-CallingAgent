@@ -64,6 +64,9 @@ services:
       - LOG_LEVEL=debug
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+    # P2-6: docker stop sends SIGTERM then kills after this; it must outlast the app's own
+    # graceful shutdown (API: WEB_GRACEFUL_SHUTDOWN_SECONDS, workers: the job deadline).
+    stop_grace_period: 40s
     depends_on:
       db:
         condition: service_healthy
@@ -82,6 +85,9 @@ services:
       - DB_ROLE=worker
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+    # P2-6: docker stop sends SIGTERM then kills after this; it must outlast the app's own
+    # graceful shutdown (API: WEB_GRACEFUL_SHUTDOWN_SECONDS, workers: the job deadline).
+    stop_grace_period: 40s
     depends_on:
       db:
         condition: service_healthy
@@ -100,6 +106,9 @@ services:
       - DB_ROLE=analysis
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+    # P2-6: docker stop sends SIGTERM then kills after this; it must outlast the app's own
+    # graceful shutdown (API: WEB_GRACEFUL_SHUTDOWN_SECONDS, workers: the job deadline).
+    stop_grace_period: 40s
     depends_on:
       db:
         condition: service_healthy
@@ -118,6 +127,9 @@ services:
       - DB_ROLE=sweeper
       - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
       - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+    # P2-6: docker stop sends SIGTERM then kills after this; it must outlast the app's own
+    # graceful shutdown (API: WEB_GRACEFUL_SHUTDOWN_SECONDS, workers: the job deadline).
+    stop_grace_period: 20s
     depends_on:
       db:
         condition: service_healthy
