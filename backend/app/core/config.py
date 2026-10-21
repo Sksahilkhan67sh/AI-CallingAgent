@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     # Alembic: no statement timeout (a migration may legitimately run long), but a bounded wait for
     # locks so a migration blocked by a long transaction fails loudly instead of hanging deploys.
     db_migration_lock_timeout_ms: int = Field(default=10_000, ge=0)
+    # P2-5: alembic serialises concurrent migrators with an advisory lock and retries a migration
+    # that a long transaction blocks (lock timeout above), then aborts with a clear message.
+    db_migration_lock_wait_seconds: int = Field(default=300, ge=1)  # waiting for another migrator
+    db_migration_lock_retries: int = Field(default=3, ge=1)  # attempts when blocked by a lock
+    db_migration_retry_delay_seconds: int = Field(default=2, ge=0)
 
     # P2-4: size of the AnyIO threadpool that runs sync API routes. Unset = the pool capacity
     # (DB_POOL_SIZE + DB_MAX_OVERFLOW), so request threads cannot outnumber connections.

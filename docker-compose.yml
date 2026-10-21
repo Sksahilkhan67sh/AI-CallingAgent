@@ -38,6 +38,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # P2-5: the only place that runs migrations. Runs once and exits; every service that touches the
+  # schema waits for it to finish successfully. `restart: "no"` so a failed migration is visible
+  # instead of looping. Alembic takes an advisory lock, so even a second run is safe.
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    env_file:
+      - ./backend/.env.example
+    environment:
+      - LOG_LEVEL=debug
+      - PRIMARY_DB_URL=postgresql+psycopg://postgres:postgres@db:5432/ai_calling_agent
+    depends_on:
+      db:
+        condition: service_healthy
+
   backend:
     build: ./backend
     ports:
@@ -51,6 +67,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -67,6 +85,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -83,6 +103,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -99,6 +121,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
