@@ -138,6 +138,13 @@ class Settings(BaseSettings):
 
     # P2-4: size of the AnyIO threadpool that runs sync API routes. Unset = the pool capacity
     # (DB_POOL_SIZE + DB_MAX_OVERFLOW), so request threads cannot outnumber connections.
+    # P2-6: web server. Each web process builds its own engine and pool, so the connection budget
+    # is WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW) for the API (CONNECTION-BUDGET.md).
+    web_concurrency: int = Field(default=1, ge=1)
+    # Seconds the API lets in-flight requests finish after SIGTERM before it stops regardless.
+    web_graceful_shutdown_seconds: int = Field(default=30, ge=1)
+    # Seconds an idle keep-alive connection is held open.
+    web_keep_alive_seconds: int = Field(default=5, ge=1)
     api_threadpool_size: int | None = Field(default=None, ge=1)
     # P2-4: the most connections THIS process may ever hold. Unset = no check. Set it per service
     # from docs/hardening-p2/CONNECTION-BUDGET.md; the app refuses to boot if its pool is larger.

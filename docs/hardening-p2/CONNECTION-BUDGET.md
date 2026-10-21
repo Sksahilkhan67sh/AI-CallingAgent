@@ -9,7 +9,8 @@ sum over services of ( replicas x processes x (DB_POOL_SIZE + DB_MAX_OVERFLOW) )
 
 - **replicas**: containers of that service.
 - **processes**: OS processes per container, each with its **own** pool. Today every service runs
-  one. P2-6 adds `WEB_CONCURRENCY` for the API; a value of N makes the API row `1 x N x capacity`.
+  one. The API's process count is `WEB_CONCURRENCY` (P2-6, default 1): a value of N makes the
+  `backend` row `1 x N x capacity`, so raise it only after recomputing the sum below.
 - **reserve**: connections that are not a steady pool (see the Reserve table).
 - Pool capacity per process is `DB_POOL_SIZE + DB_MAX_OVERFLOW` (5 + 10 = 15 by default). A pool
   only opens overflow connections under load, so this is the worst case, which is what a budget
