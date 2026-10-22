@@ -11,17 +11,18 @@ Integration branch: `main`. Labels: [RAN] / [READ] / [ASSUMED].
 | P2-4 | Pool vs threadpool, connection budget | MERGED | #95 | API_THREADPOOL_SIZE (default = pool capacity) applied via lifespan; DB_MAX_CONNECTIONS_BUDGET fails boot; max_connections=100 explicit in compose; CONNECTION-BUDGET.md table (60 + reserve 14 = 74) checked against real compose by test [READ]; 12 tests pass, faketime x3 pass; full suite 2035 passed, 13 skipped [RAN]; threadpool 15 vs 40 sweep inconclusive on fast queries (revisit in P2-8) [RAN] | 5 |
 | P2-5 | Migrations as one-shot job | MERGED | #96 | two concurrent alembic upgrades on a fresh DB: both exit 0, one head, no duplicate DDL, 10/10 repeats (failed 3/3 before) [RAN]; blocked by held lock -> aborts cleanly after retries at previous revision, succeeds when blocker releases [RAN]; bounded wait on advisory lock [RAN]; entrypoint migrates only with RUN_MIGRATIONS=1; compose migrate service + service_completed_successfully wiring parsed [READ]; 13 of 15 tests red before; full suite 2050 passed, 13 skipped; faketime x3 pass (exact command) [RAN]; docker compose config NOT run (HUMAN-TODO) | 6 |
 | P2-6 | Web concurrency, graceful shutdown | MERGED | #98 | decision: uvicorn --workers (no new dependency; see SHUTDOWN.md); WEB_CONCURRENCY=2 serves from 2 PIDs, 25/25 repeats [RAN]; SIGTERM with 4 in-flight requests: all 200, exit 0, new connections refused [RAN]; a 30 s request with 2 s grace does not delay exit [RAN]; worker/analysis/sweeper exit cleanly on SIGTERM, no loss or hang found so no change [RAN]; 11 of 11 first tests red; full suite 2065 passed, 12 skipped; faketime x3 pass (exact command) [RAN]; Docker stop behaviour NOT run (HUMAN-TODO) | 7 |
-| P2-7 | DB-resilience gate | TODO | | | |
+| P2-7 | DB-resilience gate | MERGED | #99 | gate (a)-(f) green: 9 passed, 1 skipped (optional restart; ran it by hand against a real restart: pass) [RAN]; 4 mutations (no pre-ping, no statement timeout, no advisory lock, no 503 mapping) each make the gate FAIL, baseline and restore OK [RAN]; faketime x3 pass (exact command; 2 children on real clock, see P2-7-GATE.md); repeats: 3 light/random scenarios x200 = 600/600, 6 heavy scenarios x10 = 60/60, whole file x200 NOT run (~90 min); full suite 2074 passed, 13 skipped [RAN]; gate must pass in CI on main for Phase 2 to be complete | 8 |
 | P2-8 | Load smoke, capacity numbers | TODO | | | |
 | P2-9 | Close-out | TODO | | | |
 
 ## Resume point
-Next: start P2-7 (branch `fix/p2-7-resilience-gate`).
+Next: start P2-8 (branch `fix/p2-8-load-smoke`).
 
 ## HUMAN-TODO
 - P2-1: `docker build ./backend` and `docker build ./frontend` (never built in this sandbox).
 - P2-5: `docker compose config && docker compose up -d`; confirm `migrate` exits 0 before backend/worker/analysis-worker/sweeper start.
 - P2-6: `docker compose up -d && docker compose stop backend` with a slow request in flight; confirm it completes and the container exits 0 within the 40 s grace period.
+- P2-7: run the gate with `P2_PG_RESTART_CMD` set to the restart command of YOUR stack (e.g. `docker compose restart db`); only the sandbox server was restarted here.
 
 ## Incidents
 - 2026-10-21, PR #97: the Dependency audit check started failing for every commit (including PR #96 for P2-5, which changes no dependency) because PYSEC-2026-4320 was published against `certifi==2026.7.22` (bundled CA store trusted a root whose intermediates have compromised keys; fixed in 2026.10.19). Fixed by pinning only `certifi==2026.10.19` in `backend/constraints.txt` [RAN: `scripts/constraints.sh check`, `audit_gate.py pip` and `audit_gate.py npm` all clean locally]. Not a Phase 2 task; no other dependency changed.
