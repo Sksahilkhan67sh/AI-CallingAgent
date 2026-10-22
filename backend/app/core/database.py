@@ -56,6 +56,8 @@ def make_engine(s: Settings, **kwargs: Any) -> Engine:
     go to `create_engine` (used by tests)."""
     connect_args = dict(kwargs.pop("connect_args", {}))
     connect_args["options"] = server_options(role_timeouts_ms(s))
+    # Shows in pg_stat_activity (which service owns a connection) and lets tooling target it.
+    connect_args.setdefault("application_name", f"aca-{s.db_role}")
     return create_engine(
         s.primary_db_url,
         pool_size=s.db_pool_size,
