@@ -14,7 +14,17 @@ trimmed, retries live in PostgreSQL (Redis is a rebuildable cache), Redis runs w
 password, a stuck-call sweeper and a dead-letter stream resolve what a crash leaves behind, reclaim
 is time-based with a per-job deadline, every outbound call has explicit timeouts, and a failed
 transcript fetch is never recorded as an empty one. Phase 1 is complete only when
-`backend/tests/test_p1_failure_injection.py` passes in CI on `main`.
+`backend/tests/test_failure_injection.py` passes in CI on `main`.
+
+**Phase 2 hardening, "Database resilience and performance": delivered (P2-0 to P2-9;
+start with `docs/hardening-p2/FINAL-REPORT.md`).** The app survives database restarts and
+connection loss without a restart, answers 503 with `Retry-After` instead of hanging or a raw 500,
+bounds statements, locks and idle transactions on the server, caps the pool and threadpool against
+a stated connection budget, runs migrations once in a `migrate` job that is safe under
+concurrency, and runs several API processes that shut down gracefully. Docker-dependent checks
+are listed as HUMAN-TODO in the report. Phase 2 is complete only when
+`backend/tests/test_p2_db_resilience.py` passes in CI on `main` and `main` is green after the
+last merge.
 
 **Checkpoint 09 — Production Hardening.** Hardens the Checkpoint 08
 Dograh integration for production operation rather than adding new
