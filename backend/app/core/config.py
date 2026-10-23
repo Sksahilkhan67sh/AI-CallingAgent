@@ -51,6 +51,12 @@ _MIN_PASSWORD_LENGTH = 12
 _MIN_PROCESSED_EVENT_RETENTION_DAYS = 7
 
 
+# Default API threads per pool connection (see `api_threadpool_size`).
+THREADPOOL_PER_CONNECTION = 8
+# Below this many threads per connection the pool/threadpool stall was measured.
+MIN_THREADPOOL_PER_CONNECTION = 2
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -136,8 +142,12 @@ class Settings(BaseSettings):
     db_migration_lock_retries: int = Field(default=3, ge=1)  # attempts when blocked by a lock
     db_migration_retry_delay_seconds: int = Field(default=2, ge=0)
 
-    # P2-4: size of the AnyIO threadpool that runs sync API routes. Unset = the pool capacity
-    # (DB_POOL_SIZE + DB_MAX_OVERFLOW), so request threads cannot outnumber connections.
+    # P2-4/P2-8: size of the AnyIO threadpool that runs sync API routes, per web process. Unset =
+    # 8 x the pool capacity (DB_POOL_SIZE + DB_MAX_OVERFLOW). A request's connection is released by
+    # a SEPARATE threadpool call (session cleanup); with few threads, new requests take every
+    # thread and block waiting for a connection that a finished request cannot release until a
+    # thread frees up. Measured (LOAD-SMOKE.md): 15 or 30 threads collapse at concurrency 100,
+    # 60 holds at 100 and degrades at 200, 120 holds at 200.
     # P2-6: web server. Each web process builds its own engine and pool, so the connection budget
     # is WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW) for the API (CONNECTION-BUDGET.md).
     web_concurrency: int = Field(default=1, ge=1)
@@ -157,7 +167,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_api_threadpool_size(self) -> int:
-        return self.api_threadpool_size or self.pool_capacity
+        return self.api_threadpool_size or THREADPOOL_PER_CONNECTION * self.pool_capacity
 
     # --- Queue / dialer (Checkpoint 03) ---
     redis_url: str = "redis://localhost:6379/0"
