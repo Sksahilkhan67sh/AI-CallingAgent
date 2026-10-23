@@ -17,7 +17,7 @@ from fastapi import Depends
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import Settings, get_settings
+from app.core.config import MIN_THREADPOOL_PER_CONNECTION, Settings, get_settings
 
 settings = get_settings()
 
@@ -98,13 +98,15 @@ DB_SESSION = Depends(get_db, scope="function")
 
 
 def threadpool_warnings(s: Settings) -> list[str]:
-    """Why the API threadpool may outgrow the pool (P2-4). A warning, not an error: when many
-    requests never touch the database, more threads than connections is a fair choice."""
-    if s.effective_api_threadpool_size <= s.pool_capacity:
+    """Why the API threadpool may stall the pool (P2-8). A warning, not an error: an operator may
+    know their workload better than the load test did."""
+    floor = MIN_THREADPOOL_PER_CONNECTION * s.pool_capacity
+    if s.effective_api_threadpool_size >= floor:
         return []
     return [
-        f"API_THREADPOOL_SIZE ({s.effective_api_threadpool_size}) exceeds the pool capacity "
-        f"({s.pool_capacity} = DB_POOL_SIZE + DB_MAX_OVERFLOW): if that many requests need the "
-        f"database at once, the surplus waits up to DB_POOL_TIMEOUT ({s.db_pool_timeout:g} s) "
-        "and then gets a 503"
+        f"API_THREADPOOL_SIZE ({s.effective_api_threadpool_size}) is below "
+        f"{MIN_THREADPOOL_PER_CONNECTION}x the pool capacity ({s.pool_capacity} = DB_POOL_SIZE + "
+        "DB_MAX_OVERFLOW). Under load a connection can be held by a finished request that is "
+        "waiting for a free thread to release it, which stalls the API until DB_POOL_TIMEOUT "
+        f"({s.db_pool_timeout:g} s); see docs/hardening-p2/LOAD-SMOKE.md"
     ]

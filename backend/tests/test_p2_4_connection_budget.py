@@ -31,14 +31,15 @@ def env(monkeypatch):
 # -- settings and the validator -------------------------------------------------------------
 
 
-def test_the_threadpool_defaults_to_the_pool_capacity(env) -> None:
+def test_the_threadpool_defaults_to_eight_times_the_pool_capacity(env) -> None:
+    # Measured in P2-8: threads equal to (or twice) the connections stall the pool under load.
     s = Settings()
     assert s.api_threadpool_size is None
     assert s.pool_capacity == 15
-    assert s.effective_api_threadpool_size == 15
+    assert s.effective_api_threadpool_size == 120
     env.setenv("DB_POOL_SIZE", "4")
     env.setenv("DB_MAX_OVERFLOW", "2")
-    assert Settings().effective_api_threadpool_size == 6  # follows the pool, not a fixed number
+    assert Settings().effective_api_threadpool_size == 48  # follows the pool, not a fixed number
 
 
 def test_an_explicit_threadpool_size_wins(env) -> None:
@@ -64,13 +65,13 @@ def test_a_pool_within_the_budget_boots(env, budget: str) -> None:
     assert Settings().db_max_connections_budget == int(budget)
 
 
-def test_threads_beyond_the_pool_capacity_are_warned_about(env) -> None:
+def test_a_threadpool_below_twice_the_pool_capacity_is_warned_about(env) -> None:
     from app.core.database import threadpool_warnings
 
+    assert threadpool_warnings(Settings()) == []  # the default is 8x
+    env.setenv("API_THREADPOOL_SIZE", "30")  # exactly 2 x 15
     assert threadpool_warnings(Settings()) == []
-    env.setenv("API_THREADPOOL_SIZE", "15")
-    assert threadpool_warnings(Settings()) == []
-    env.setenv("API_THREADPOOL_SIZE", "40")
+    env.setenv("API_THREADPOOL_SIZE", "15")  # one thread per connection: the measured stall
     (message,) = threadpool_warnings(Settings())
     assert "API_THREADPOOL_SIZE" in message and "DB_POOL_TIMEOUT" in message
 
@@ -90,7 +91,7 @@ def _limiter_seen_by_the_app(settings: Settings) -> int:
 
 
 def test_startup_sets_the_anyio_threadpool_to_the_effective_size(env) -> None:
-    assert _limiter_seen_by_the_app(Settings()) == 15
+    assert _limiter_seen_by_the_app(Settings()) == 120
     env.setenv("API_THREADPOOL_SIZE", "7")
     assert _limiter_seen_by_the_app(Settings()) == 7
 

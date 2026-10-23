@@ -55,20 +55,15 @@ compose services or `max_connections` drift apart.
 
 ## Threadpool
 
-Sync API routes run in the AnyIO threadpool. `API_THREADPOOL_SIZE` defaults to the pool capacity of
-the process (15), so threads and connections stay in proportion.
+Sync API routes run in the AnyIO threadpool, per web process. `API_THREADPOOL_SIZE` defaults to
+**8 x the pool capacity** of the process (120 for 5 + 10).
 
-Measured [RAN], 1 vCPU sandbox, `WEB_CONCURRENCY=2`, concurrency 50, 10 s, mock provider, fast
-queries (see `LOAD-SMOKE.md` once P2-8 lands):
+This replaces the P2-4 default of 1 x capacity, which was wrong: P2-8 measured that with 15 or 30
+threads per process the API stalls under load (a connection can be held by a finished request
+that is waiting for a free thread to release it), while 120 held at 200 concurrent clients with
+no errors. The sweep and the mechanism are in `LOAD-SMOKE.md` section 3. The earlier P2-4 sweep
+(fast queries, 15 vs 40) could not separate these settings because the single CPU saturates first.
 
-| Threadpool | Read req/s | Read p95 | Write req/s | Write p95 | 5xx / pool timeouts |
-|---|---|---|---|---|---|
-| 15 (default) | 86 | 1605 ms | 69 | 1912 ms | 0 / 0 |
-| 40 (old AnyIO default) | 79 | 1633 ms | 73 | 1822 ms | 0 / 0 |
-
-**These numbers do not separate the two settings.** With fast queries the single CPU saturates
-first and the difference is inside run-to-run noise, so the result neither contradicts nor proves
-15. The default is therefore a *design* choice (threads proportional to connections, so overload
-sheds as a fast 503 instead of queueing for a connection), not a measured optimum. P2-8 repeats the
-sweep with a slow-query variant, where the two settings should differ, and this section is revised
-there if the data disagrees.
+A startup warning fires when the threadpool is below 2 x the pool capacity. Threads are cheap
+relative to connections (they are not connections): raising the thread count does not raise the
+connection budget above, which stays `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW)`.
